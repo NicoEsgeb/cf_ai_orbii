@@ -18,8 +18,8 @@ type WorkersAiResponse = {
 
 type SessionState = {
   history: ChatMessage[];
-  /** Optional study material to feed back into prompts. */
-  studyText?: string;
+  /** Study material captured for this session. */
+  studyText: string;
 };
 
 const MAX_HISTORY_ENTRIES = 10;
@@ -60,7 +60,7 @@ export class ChatSession implements DurableObject {
     const sessionState = await this.getSessionState();
     const previousHistory = sessionState.history.slice(-MAX_HISTORY_ENTRIES);
 
-    const truncatedStudyText = (sessionState.studyText ?? "").slice(0, MAX_STUDY_TEXT_CHARS);
+    const truncatedStudyText = sessionState.studyText.slice(0, MAX_STUDY_TEXT_CHARS);
 
     const messages: ChatMessage[] = [
       {
@@ -126,7 +126,7 @@ export class ChatSession implements DurableObject {
       studyText,
     });
 
-    return json({ ok: true });
+    return json({ ok: true, characters: studyText.length });
   }
 
   private async getSessionState(): Promise<SessionState> {
@@ -134,7 +134,7 @@ export class ChatSession implements DurableObject {
     if (stored) {
       return {
         history: Array.isArray(stored.history) ? stored.history : [],
-        studyText: stored.studyText,
+        studyText: typeof stored.studyText === "string" ? stored.studyText : "",
       };
     }
 
@@ -142,7 +142,7 @@ export class ChatSession implements DurableObject {
     const legacyHistory =
       (await this.state.storage.get<ChatMessage[]>("history")) ?? [];
 
-    return { history: legacyHistory }; // studyText defaults to undefined.
+    return { history: legacyHistory, studyText: "" };
   }
 
   private async saveSessionState(state: SessionState): Promise<void> {
