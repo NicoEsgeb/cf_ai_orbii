@@ -8,12 +8,51 @@
   </head>
   <body>
     <div class="orbii-wrapper">
-      <div class="orbii-orb"></div>
+      <button
+        class="orbii-orb"
+        id="orbii-toggle"
+        type="button"
+        aria-label="Open Orbii chat"
+      ></button>
       <div class="orbii-text">
         <h1>Orbii</h1>
         <p>Your ethereal study buddy, powered by Cloudflare Workers AI.</p>
-        <p class="orbii-note">Chat + document understanding coming in the next steps.</p>
+        <p class="orbii-note">
+          Chat + document understanding coming in the next steps.
+        </p>
       </div>
     </div>
+
+    <div class="orbii-chat" id="orbii-chat">
+      <div class="orbii-chat-header">
+        <span>Orbii study chat</span>
+        <button
+          class="orbii-chat-close"
+          id="orbii-close"
+          type="button"
+          aria-label="Close chat"
+        >
+          ×
+        </button>
+      </div>
+      <div class="orbii-chat-messages" id="orbii-messages">
+        <div class="orbii-message orbii-message-assistant">
+          👋 I’m Orbii. For now I just echo what you send, but I’ll soon be
+          powered by Cloudflare Workers AI.
+        </div>
+      </div>
+      <form class="orbii-chat-input" id="orbii-form">
+        <input
+          id="orbii-input"
+          type="text"
+          autocomplete="off"
+          placeholder="Ask Orbii something..."
+          required
+        />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

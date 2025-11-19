@@ -39,15 +39,33 @@ body {
   width: 130px;
   height: 130px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 20%, var(--orb-core), #4ade80 40%, #0ea5e9 70%, transparent 75%);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: radial-gradient(
+    circle at 30% 20%,
+    var(--orb-core),
+    #4ade80 40%,
+    #0ea5e9 70%,
+    transparent 75%
+  );
   box-shadow:
     0 0 40px rgba(125, 211, 252, 0.9),
     0 0 80px rgba(56, 189, 248, 0.7);
   animation: orbii-pulse 4s ease-in-out infinite;
+  outline: none;
+}
+
+.orbii-orb:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(59, 130, 246, 0.8),
+    0 0 40px rgba(125, 211, 252, 0.9),
+    0 0 80px rgba(56, 189, 248, 0.7);
 }
 
 @keyframes orbii-pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
     box-shadow:
       0 0 40px rgba(125, 211, 252, 0.9),
@@ -81,5 +99,132 @@ body {
   .orbii-wrapper {
     flex-direction: column;
     text-align: center;
+  }
+}
+
+/* --- Chat panel --- */
+
+.orbii-chat {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 340px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(16px) scale(0.98);
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.18s ease-out;
+  z-index: 50;
+}
+
+.orbii-chat.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.orbii-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.9rem;
+  background: linear-gradient(to right, #0f172a, #020617);
+  font-size: 0.9rem;
+  color: #e5e7eb;
+}
+
+.orbii-chat-close {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.orbii-chat-close:hover {
+  color: #e5e7eb;
+}
+
+.orbii-chat-messages {
+  flex: 1;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  font-size: 0.9rem;
+}
+
+.orbii-message {
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.6rem;
+  line-height: 1.35;
+}
+
+.orbii-message-user {
+  align-self: flex-end;
+  background: #22c55e;
+  color: #022c22;
+}
+
+.orbii-message-assistant {
+  align-self: flex-start;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
+.orbii-chat-input {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem 0.7rem;
+  border-top: 1px solid rgba(30, 64, 175, 0.7);
+  background: rgba(15, 23, 42, 0.95);
+}
+
+.orbii-chat-input input {
+  flex: 1;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(55, 65, 81, 0.9);
+  background: #020617;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+}
+
+.orbii-chat-input input:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.9);
+  outline-offset: 1px;
+}
+
+.orbii-chat-input button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(to right, #22c55e, #22d3ee);
+  color: #022c22;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.orbii-chat-input button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (max-width: 640px) {
+  .orbii-chat {
+    width: calc(100% - 1.5rem);
+    right: 0.75rem;
+    bottom: 0.75rem;
   }
 }

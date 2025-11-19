@@ -1,0 +1,68 @@
+const chatEl = document.getElementById("orbii-chat");
+const toggleBtn = document.getElementById("orbii-toggle");
+const closeBtn = document.getElementById("orbii-close");
+const messagesEl = document.getElementById("orbii-messages");
+const formEl = document.getElementById("orbii-form");
+const inputEl = document.getElementById("orbii-input");
+
+function setChatOpen(open) {
+  if (!chatEl) return;
+  chatEl.classList.toggle("is-open", open);
+}
+
+function appendMessage(role, text) {
+  if (!messagesEl) return;
+  const div = document.createElement("div");
+  div.className = `orbii-message orbii-message-${role}`;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+toggleBtn?.addEventListener("click", () => {
+  const isOpen = chatEl?.classList.contains("is-open");
+  setChatOpen(!isOpen);
+});
+
+closeBtn?.addEventListener("click", () => setChatOpen(false));
+
+formEl?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!inputEl) return;
+
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  appendMessage("user", text);
+  inputEl.value = "";
+
+  const submitButton = formEl.querySelector("button[type=submit]");
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+
+    if (!response.ok) {
+      appendMessage("assistant", "Hmm, something went wrong talking to the server.");
+      return;
+    }
+
+    const data = await response.json();
+    const reply = typeof data.reply === "string" ? data.reply : "No reply received.";
+    appendMessage("assistant", reply);
+  } catch (error) {
+    console.error(error);
+    appendMessage("assistant", "Network error while contacting Orbii.");
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+// Open chat if the page is loaded on a very small screen (optional nice touch)
+if (window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
+  setChatOpen(true);
+}
