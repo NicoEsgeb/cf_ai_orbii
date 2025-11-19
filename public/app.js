@@ -8,12 +8,15 @@ const studyForm = document.getElementById("orbii-study-form");
 const studyTextEl = document.getElementById("orbii-study-text");
 const studyStatusEl = document.getElementById("orbii-study-status");
 const sessionResetBtn = document.getElementById("orbii-session-reset");
+const quizStartBtn = document.getElementById("orbii-quiz-start");
 
 const SESSION_STORAGE_KEY = "orbii-session-id";
 const STUDY_STATUS_DEFAULT_MESSAGE =
   "Paste text and click save to keep it with this session.";
 const ORBII_ASSISTANT_GREETING =
-  "👋 I’m Orbii. For now I just echo what you send, but I’ll soon be powered by Cloudflare Workers AI.";
+  '👋 I\'m Orbii, your friendly study buddy. Paste some study text above, then ask me questions or say "quiz me" and I\'ll help you learn.';
+const QUIZ_PROMPT_MESSAGE =
+  "I'd like you to quiz me on my current study text. Please ask me one short question at a time.";
 let sessionId;
 
 function createNewSessionId() {
@@ -58,6 +61,34 @@ function appendMessage(role, text) {
   div.textContent = text;
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Sends a message to Orbii and appends whatever reply comes back.
+async function sendOrbiiMessage(text) {
+  const submitButton = formEl?.querySelector("button[type=submit]");
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, sessionId }),
+    });
+
+    if (!response.ok) {
+      appendMessage("assistant", "Hmm, something went wrong talking to the server.");
+      return;
+    }
+
+    const data = await response.json();
+    const reply = typeof data.reply === "string" ? data.reply : "No reply received.";
+    appendMessage("assistant", reply);
+  } catch (error) {
+    console.error(error);
+    appendMessage("assistant", "Network error while contacting Orbii.");
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 }
 
 function setStudyStatus(message) {
@@ -106,31 +137,15 @@ formEl?.addEventListener("submit", async (event) => {
 
   appendMessage("user", text);
   inputEl.value = "";
+  await sendOrbiiMessage(text);
+});
 
-  const submitButton = formEl.querySelector("button[type=submit]");
-  if (submitButton) submitButton.disabled = true;
-
-  try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, sessionId }),
-    });
-
-    if (!response.ok) {
-      appendMessage("assistant", "Hmm, something went wrong talking to the server.");
-      return;
-    }
-
-    const data = await response.json();
-    const reply = typeof data.reply === "string" ? data.reply : "No reply received.";
-    appendMessage("assistant", reply);
-  } catch (error) {
-    console.error(error);
-    appendMessage("assistant", "Network error while contacting Orbii.");
-  } finally {
-    if (submitButton) submitButton.disabled = false;
-  }
+quizStartBtn?.addEventListener("click", async (event) => {
+  event.preventDefault();
+  const text = QUIZ_PROMPT_MESSAGE;
+  setChatOpen(true);
+  appendMessage("user", text);
+  await sendOrbiiMessage(text);
 });
 
 studyForm?.addEventListener("submit", async (event) => {

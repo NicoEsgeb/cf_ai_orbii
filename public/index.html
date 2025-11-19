@@ -36,25 +36,24 @@
       <p class="orbii-study-status" id="orbii-study-status">
         Paste text and click save to keep it with this session.
       </p>
-      <button
-        type="button"
-        id="orbii-session-reset"
-        class="orbii-session-reset"
-        aria-label="Start a new Orbii session"
-        style="
-          margin-top: 0.3rem;
-          padding: 0.2rem 0.85rem;
-          border-radius: 999px;
-          border: 1px solid rgba(148, 163, 184, 0.4);
-          background: rgba(2, 6, 23, 0.7);
-          color: #d1d5db;
-          font-size: 0.75rem;
-          align-self: flex-start;
-          cursor: pointer;
-        "
-      >
-        Start a new session
-      </button>
+      <div class="orbii-study-actions">
+        <button
+          type="button"
+          id="orbii-quiz-start"
+          class="orbii-secondary-button"
+          aria-label="Ask Orbii to quiz you on your study text"
+        >
+          Quiz me on this
+        </button>
+        <button
+          type="button"
+          id="orbii-session-reset"
+          class="orbii-session-reset orbii-secondary-button"
+          aria-label="Start a new Orbii session"
+        >
+          Start a new session
+        </button>
+      </div>
     </section>
 
     <div class="orbii-chat" id="orbii-chat">
@@ -71,8 +70,8 @@
       </div>
       <div class="orbii-chat-messages" id="orbii-messages">
         <div class="orbii-message orbii-message-assistant">
-          👋 I’m Orbii. For now I just echo what you send, but I’ll soon be
-          powered by Cloudflare Workers AI.
+          👋 I'm Orbii, your friendly study buddy. Paste some study text above,
+          then ask me questions or say "quiz me" and I'll help you learn.
         </div>
       </div>
       <form class="orbii-chat-input" id="orbii-form">
