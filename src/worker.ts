@@ -17,51 +17,59 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
-    // Avoid a noisy error when the browser auto-requests /favicon.ico
+    // Avoid a noisy error when the browser auto-requests /favicon.ico.
     if (url.pathname === "/favicon.ico") {
       return new Response(null, { status: 204 });
     }
 
     if (url.pathname === "/api/chat" && request.method === "POST") {
+      // Try to read the incoming JSON body. If it is missing or malformed,
+      // return a friendly 400 error to the client.
       let body: ChatRequest;
       try {
         body = (await request.json()) as ChatRequest;
       } catch {
-        return json({ error: "Invalid JSON body" }, 400);
+        return json({ error: "Invalid request body" }, 400);
       }
 
       const userMessage = (body.message ?? "").toString().trim();
       if (!userMessage) {
-        return json({ error: "Message is required" }, 400);
+        return json({ error: "Invalid request body" }, 400);
       }
 
-      // Chat format for the model: start with a clear system prompt, then the user message.
+      // Chat-style payload: system prompt to set the Orbii persona, then the user's message.
       const messages = [
         {
           role: "system",
           content:
-            "You are Orbii, an ethereal study buddy that explains things clearly to a student. Keep answers concise, friendly, and focused on learning.",
+            "You are Orbii, an ethereal study buddy who answers clearly, concisely, and kindly to help someone learn.",
         },
         { role: "user", content: userMessage },
       ];
 
-      // Call Workers AI via the bound model. The response object includes a `response`
-      // field containing the generated text.
-      const aiResponse = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-        messages,
-      });
+      try {
+        // Call Workers AI using the bound model. The response contains the assistant text.
+        const aiResponse = await env.AI.run(
+          "@cf/meta/llama-3.1-8b-instruct",
+          { messages },
+        );
 
-      const replyText =
-        // Preferred field returned by Workers AI chat models.
-        (aiResponse as { response?: string }).response ??
-        // Fallback in case the shape changes or a different model is used.
-        (aiResponse as { result?: string }).result ??
-        "Sorry, I couldn't generate a reply.";
+        const replyText =
+          // Preferred field returned by Workers AI chat models.
+          (aiResponse as { response?: string }).response ??
+          // Fallback in case the shape changes or a different model is used.
+          (aiResponse as { result?: string }).result ??
+          "Sorry, I couldn't generate a reply.";
 
-      return json({ reply: replyText });
+        return json({ reply: replyText });
+      } catch (error) {
+        // Any failure talking to Workers AI returns a 500 with a safe error message.
+        console.error("AI request failed", error);
+        return json({ error: "AI request failed" }, 500);
+      }
     }
 
-    // For all non-API routes, serve static assets from /public
+    // For all non-API routes, serve static assets from /public.
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
