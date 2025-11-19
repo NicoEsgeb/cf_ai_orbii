@@ -9,6 +9,7 @@ const studyTextEl = document.getElementById("orbii-study-text");
 const studyStatusEl = document.getElementById("orbii-study-status");
 const sessionResetBtn = document.getElementById("orbii-session-reset");
 const quizStartBtn = document.getElementById("orbii-quiz-start");
+const pdfInput = document.getElementById("pdf-input");
 
 const SESSION_STORAGE_KEY = "orbii-session-id";
 const STUDY_STATUS_DEFAULT_MESSAGE =
@@ -146,6 +147,18 @@ quizStartBtn?.addEventListener("click", async (event) => {
   setChatOpen(true);
   appendMessage("user", text);
   await sendOrbiiMessage(text);
+});
+
+// Handle PDF selection so future steps can process it server-side.
+pdfInput?.addEventListener("change", (event) => {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file || file.type !== "application/pdf") {
+    alert("Please select a PDF file.");
+    input.value = "";
+    return;
+  }
+  console.log(`Orbii PDF upload: ${file.name}, size: ${file.size} bytes`);
 });
 
 studyForm?.addEventListener("submit", async (event) => {
