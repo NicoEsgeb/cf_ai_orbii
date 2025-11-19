@@ -7,9 +7,28 @@ const inputEl = document.getElementById("orbii-input");
 const studyForm = document.getElementById("orbii-study-form");
 const studyTextEl = document.getElementById("orbii-study-text");
 const studyStatusEl = document.getElementById("orbii-study-status");
+const sessionResetBtn = document.getElementById("orbii-session-reset");
 
 const SESSION_STORAGE_KEY = "orbii-session-id";
+const STUDY_STATUS_DEFAULT_MESSAGE =
+  "Paste text and click save to keep it with this session.";
+const ORBII_ASSISTANT_GREETING =
+  "👋 I’m Orbii. For now I just echo what you send, but I’ll soon be powered by Cloudflare Workers AI.";
 let sessionId;
+
+function createNewSessionId() {
+  return typeof window.crypto?.randomUUID === "function"
+    ? window.crypto.randomUUID()
+    : `sess-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function persistSessionId(id) {
+  try {
+    window.localStorage?.setItem(SESSION_STORAGE_KEY, id);
+  } catch (error) {
+    console.warn("Unable to persist Orbii session ID", error);
+  }
+}
 
 try {
   const storedSession = window.localStorage?.getItem(SESSION_STORAGE_KEY);
@@ -21,17 +40,8 @@ try {
 }
 
 if (!sessionId) {
-  const newSessionId =
-    typeof window.crypto?.randomUUID === "function"
-      ? window.crypto.randomUUID()
-      : `sess-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  sessionId = newSessionId;
-
-  try {
-    window.localStorage?.setItem(SESSION_STORAGE_KEY, sessionId);
-  } catch (error) {
-    console.warn("Unable to persist Orbii session ID", error);
-  }
+  sessionId = createNewSessionId();
+  persistSessionId(sessionId);
 }
 
 console.log("Orbii session:", sessionId);
@@ -55,12 +65,37 @@ function setStudyStatus(message) {
   studyStatusEl.textContent = message;
 }
 
+function resetOrbiiSession() {
+  // Create and persist a fresh session ID so future requests use the new topic.
+  sessionId = createNewSessionId();
+  persistSessionId(sessionId);
+
+  // Reset chat history to only show Orbii's greeting.
+  if (messagesEl) {
+    messagesEl.innerHTML = "";
+    appendMessage("assistant", ORBII_ASSISTANT_GREETING);
+  }
+
+  // Clear study inputs and hint so the user knows they need to save again.
+  if (studyTextEl) {
+    studyTextEl.value = "";
+  }
+  setStudyStatus(STUDY_STATUS_DEFAULT_MESSAGE);
+
+  console.log("Orbii session:", sessionId);
+}
+
 toggleBtn?.addEventListener("click", () => {
   const isOpen = chatEl?.classList.contains("is-open");
   setChatOpen(!isOpen);
 });
 
 closeBtn?.addEventListener("click", () => setChatOpen(false));
+
+sessionResetBtn?.addEventListener("click", (event) => {
+  event.preventDefault();
+  resetOrbiiSession();
+});
 
 formEl?.addEventListener("submit", async (event) => {
   event.preventDefault();
