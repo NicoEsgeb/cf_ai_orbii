@@ -21,8 +21,15 @@ Every chat request sent through `env.AI.run("@cf/meta/llama-3.1-8b-instruct", { 
 
 This results in a chronological `messages` array that mirrors the OpenAI/Workers AI Chat Completions format. Study text is injected as “context” document text so Orbii can answer questions about what the learner pasted, quiz them on those passages, or reference specific facts without hallucinating.
 
+### Quiz mode
+The frontend occasionally sends a fixed user message to switch Orbii into a quiz cadence. When a learner taps “Quiz me on this”, the next `messages` array includes a user entry such as:
+
+> I'd like you to quiz me on my current study text. Please ask me one short question at a time.
+
+This is treated like any other user message when `env.AI.run("@cf/meta/llama-3.1-8b-instruct", …)` calls the Workers AI Llama 3.1 8B Instruct model. The Durable Object then keeps the study text + chat history intact, so the model naturally responds with quiz-style prompts until the learner changes the topic.
+
 ## Future prompt ideas
-- “Quiz mode” where Orbii only responds with questions until the user says “explain”.
+- “Adaptive quiz mode” where Orbii keeps quizzing but adjusts difficulty until the user says “explain”.
 - “Summary mode” to condense long study text into five key points before chatting.
 - “Flashcard mode” that turns the most important sentences into spaced-repetition cards.
 - “Energy boost mode” with more motivational language before exams or study sprints.

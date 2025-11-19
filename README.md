@@ -7,6 +7,12 @@ The UI is a lightweight widget served directly from a Cloudflare Worker, so it c
 
 Each browser session gets its own long-lived memory, letting Orbii remember the uploaded study text and the full conversation even after a refresh or tab reopen.
 
+## How this meets the Cloudflare AI assignment
+- **LLM** – Uses Workers AI via the `AI` binding to call `@cf/meta/llama-3.1-8b-instruct` for every reply.
+- **Workflow / coordination** – A `ChatSession` Durable Object orchestrates study text storage, chat history, and the actual Workers AI calls.
+- **User input** – The Worker serves a browser-based study panel (textarea) plus a chat box, so learners can paste context and type follow-up questions.
+- **Memory / state** – Durable Object instances persist the latest study text and rolling conversation history, keyed by the browser’s `sessionId`.
+
 ## Architecture
 - **Frontend** – Static assets in `public/` (`index.html`, `style.css`, `app.js`) are returned by the Worker for all non-API routes.
 - **Worker backend (`src/worker.ts`)**
@@ -26,14 +32,19 @@ Every browser pulls or creates a `sessionId` via `localStorage`. That ID is sent
 - Returns the same data after refreshes, so the learner keeps their context unless localStorage is cleared.
 
 ## Quickstart
+- **Prerequisites**
+  - Node.js 18+ (or the version you normally use for Workers projects)
+  - Cloudflare account with Workers AI enabled
+  - Wrangler CLI installed (`npm install -g wrangler` or use `npx wrangler`)
 - `npm install`
 - Ensure your Cloudflare account has Workers AI enabled.
 - In Wrangler (or the Cloudflare dashboard) configure a binding named `AI` and a Durable Object namespace `CHAT_SESSIONS` (already referenced in `wrangler.toml`).
 - Run `npm run dev` to start `wrangler dev` at http://localhost:8787.
 
 ## Deployment
+- Run `npx wrangler login` once to authenticate.
 - Deploy with `npm run deploy` (or `npx wrangler deploy`).
-- Confirm the production Worker has the same `AI` binding and `CHAT_SESSIONS` Durable Object configured in the Cloudflare dashboard.
+- In the Cloudflare dashboard, confirm the `AI` binding and `CHAT_SESSIONS` Durable Object namespace exist and match the names in `wrangler.toml`.
 
 ## Project status / future work
 - [x] Chat with Workers AI
