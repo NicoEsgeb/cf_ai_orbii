@@ -1,3 +1,8 @@
+/**
+ * Cloudflare Worker entry point that serves Orbii's UI and API routes.
+ * Validates browser requests, forwards chat/study actions to the right Durable Object,
+ * and falls back to static assets for every other path.
+ */
 import type {
   Ai,
   DurableObjectNamespace,

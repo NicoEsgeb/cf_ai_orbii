@@ -1,54 +1,66 @@
-# cf_ai_orbii
+# Orbii – ethereal study buddy on Cloudflare Workers AI
 
-## Overview
-Orbii is an ethereal, floating “study buddy” orb that lives right inside the browser. Learners paste in study material, ask questions, and Orbii guides them with friendly encouragement plus occasional follow-ups.
+Orbii is a browser-based study buddy with a floating orb interface and a slide-up chat panel. Learners paste in the text they are studying, Orbii saves that material, and the orb replies with beginner-friendly explanations plus gentle nudges to keep going. Everything runs inside Cloudflare’s stack: a Worker serves the UI and API routes, a Durable Object keeps per-session memory, and Workers AI powers every reply.
 
-The UI is a lightweight widget served directly from a Cloudflare Worker, so it can be deployed anywhere the Worker runs. Chat replies come from Workers AI (Llama 3.x) while Durable Objects keep each session’s notes and history in sync.
+This repo is my optional submission for the Cloudflare Software Engineering Internship assignment. The goal is to show how a full mini-product can live entirely on Cloudflare, use Workers AI responsibly, and ship with clear docs for review.
 
-Each browser session gets its own long-lived memory, letting Orbii remember the uploaded study text and the full conversation even after a refresh or tab reopen.
+Each browser tab gets its own stateful chat session. Orbii remembers the current study text, the latest chat turns, and whether you toggled quiz mode, so reloading the page still brings back the same conversation.
 
-## How this meets the Cloudflare AI assignment
-- **LLM** – Uses Workers AI via the `AI` binding to call `@cf/meta/llama-3.1-8b-instruct` for every reply.
-- **Workflow / coordination** – A `ChatSession` Durable Object orchestrates study text storage, chat history, and the actual Workers AI calls.
-- **User input** – The Worker serves a browser-based study panel (textarea) plus a chat box, so learners can paste context and type follow-up questions.
-- **Memory / state** – Durable Object instances persist the latest study text and rolling conversation history, keyed by the browser’s `sessionId`.
+## Live demo
+- https://cf_ai_orbii.nico-esg-rey.workers.dev
+- Hosted on Cloudflare’s Workers free plan with Workers AI, so the LLM calls may be rate-limited after heavy usage.
+
+## How this meets the assignment requirements
+- **LLM usage** – All chat replies run through Workers AI’s `@cf/meta/llama-3.1-8b-instruct` model via the `env.AI.run(...)` binding in `src/chatSession.ts`.
+- **Workflow / coordination** – The `ChatSession` Durable Object stores study text, rolling history, and composes the message array before every model call so each session stays coherent.
+- **User input via chat** – A minimal HTML/CSS/JS UI (floating orb + slide-up chat panel) is served from static assets in `public/` by `src/worker.ts`, letting learners paste text and type questions directly in the browser.
+- **Memory / state** – Durable Object instances are keyed by the browser’s `sessionId`, preserving study text, a trimmed chat transcript, and quiz prompts across refreshes.
 
 ## Architecture
-- **Frontend** – Static assets in `public/` (`index.html`, `style.css`, `app.js`) are returned by the Worker for all non-API routes.
-- **Worker backend (`src/worker.ts`)**
-  - `GET /` → serves the UI.
-  - `POST /api/study-text` → forwards study text to a Durable Object for the current session.
-  - `POST /api/chat` → bundles recent memory + study text, forwards to the Durable Object, and streams the AI reply back to the browser.
-- **Durable Object (`src/chatSession.ts`)**
-  - Stores `sessionId`, latest study text, conversation history, and an optional short summary sent to the LLM.
-  - Handles `/study-text` to persist new material.
-  - Handles chat requests by composing the prompt, calling Workers AI, and trimming history.
-- **Workers AI** – Invoked through the `env.AI` binding with a Llama 3.x instruct model (currently `@cf/meta/llama-3.1-8b-instruct`).
+1. **Browser UI** – `public/index.html`, `style.css`, and `app.js` render the orb, study textarea, “Save to Orbii” button, chat input, and “Quiz me on this” shortcut.
+2. **Cloudflare Worker (`src/worker.ts`)** – Routes `/` to the static assets, proxies `/api/chat` and `/api/study-text` POST requests, and gets the correct Durable Object stub based on the `sessionId`.
+3. **Durable Object (`src/chatSession.ts`)** – Stores each session’s study text + chat history, builds the system/user message list, and calls `env.AI.run` with Workers AI.
+4. **Workers AI** – The Llama 3.1 8B Instruct model sends the final reply, which is immediately streamed back to the browser UI.
 
-## State and memory
-Every browser pulls or creates a `sessionId` via `localStorage`. That ID is sent with each request so the Worker can route the call to the matching Durable Object instance. The Durable Object then:
-- Stores the full study text (or the latest pasted block) for that session.
-- Keeps the rolling chat history and uses it, plus the study text, when building the prompt for Workers AI.
-- Returns the same data after refreshes, so the learner keeps their context unless localStorage is cleared.
+```
+Browser UI (orb, textarea, chat)
+  ↓  fetch /api/study-text + /api/chat
+Cloudflare Worker (src/worker.ts)
+  ↓  get Durable Object stub per session
+ChatSession Durable Object (src/chatSession.ts)
+  ↓  env.AI.run messages array
+Workers AI – Llama 3.1 8B Instruct
+```
 
-## Quickstart
-- **Prerequisites**
-  - Node.js 18+ (or the version you normally use for Workers projects)
-  - Cloudflare account with Workers AI enabled
-  - Wrangler CLI installed (`npm install -g wrangler` or use `npx wrangler`)
-- `npm install`
-- Ensure your Cloudflare account has Workers AI enabled.
-- In Wrangler (or the Cloudflare dashboard) configure a binding named `AI` and a Durable Object namespace `CHAT_SESSIONS` (already referenced in `wrangler.toml`).
-- Run `npm run dev` to start `wrangler dev` at http://localhost:8787.
+## Tech stack
+- Cloudflare Workers (TypeScript entry point in `src/worker.ts`).
+- Durable Objects with SQLite-backed storage through the `new_sqlite_classes` migration.
+- Workers AI using `@cf/meta/llama-3.1-8b-instruct`.
+- Static frontend written in vanilla HTML, CSS, and JavaScript.
 
-## Deployment
-- Run `npx wrangler login` once to authenticate.
-- Deploy with `npm run deploy` (or `npx wrangler deploy`).
-- In the Cloudflare dashboard, confirm the `AI` binding and `CHAT_SESSIONS` Durable Object namespace exist and match the names in `wrangler.toml`.
+## Features
+- Floating orb + slide-up chat UI that works on desktop and mobile.
+- Paste study text and save it per session so Orbii can stay grounded.
+- Conversation replies that cite the saved study text whenever possible.
+- “Quiz me on this” button that injects a prompt to start one-question-at-a-time quizzes.
+- Durable Object-managed memory so each session keeps history even after refreshes.
 
-## Project status / future work
-- [x] Chat with Workers AI
-- [x] Per-session memory with Durable Objects
-- [x] Paste-in study text that conditions responses
-- [ ] PDF ingestion (future)
-- [ ] Voice input (future)
+## Running locally
+1. `npm install`
+2. `npm run dev` (runs `wrangler dev` with Miniflare at http://localhost:8787)
+3. Paste study text and chat with Orbii in the browser.
+
+`wrangler dev` connects to the bound Workers AI resource, so local testing still uses your Cloudflare account’s free Workers AI tier. Make sure the `AI` binding exists in your Cloudflare account before running the dev server.
+
+## Deploying to Cloudflare
+1. `npx wrangler login` to authenticate with your Cloudflare account.
+2. Confirm `wrangler.toml` contains the `durable_objects` block for `ChatSession` and the `migrations` entry for `new_sqlite_classes` (already included in this repo).
+3. `npm run deploy` (or `npx wrangler deploy`) to publish the Worker and Durable Object.
+4. After deploy, Wrangler prints the workers.dev URL (already configured as `cf_ai_orbii.nico-esg-rey.workers.dev`), which matches the live demo link above.
+
+## Limitations & future work
+- PDF upload plus lightweight text extraction so learners can bring in longer references.
+- Voice input using Cloudflare Realtime or another Workers-compatible speech API.
+- Smarter quiz modes with spaced repetition or difficulty bands.
+
+This is the first MVP submitted for the internship prompt, and I plan to keep iterating as I test Orbii with more study sessions.

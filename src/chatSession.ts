@@ -1,3 +1,8 @@
+/**
+ * Durable Object that holds each session's study text plus rolling chat history.
+ * Accepts study text updates, composes the Workers AI message array, and persists replies
+ * so the next chat request keeps the conversation going.
+ */
 import type {
   Ai,
   DurableObject,
