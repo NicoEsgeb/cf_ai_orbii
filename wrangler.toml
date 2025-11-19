@@ -10,3 +10,7 @@ bindings = [
 
 [ai]
 binding = "AI"  # available in the Worker as env.AI
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ChatSession"]
