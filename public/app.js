@@ -5,6 +5,34 @@ const messagesEl = document.getElementById("orbii-messages");
 const formEl = document.getElementById("orbii-form");
 const inputEl = document.getElementById("orbii-input");
 
+const SESSION_STORAGE_KEY = "orbii-session-id";
+let sessionId;
+
+try {
+  const storedSession = window.localStorage?.getItem(SESSION_STORAGE_KEY);
+  if (storedSession) {
+    sessionId = storedSession;
+  }
+} catch (error) {
+  console.warn("Unable to read Orbii session from storage", error);
+}
+
+if (!sessionId) {
+  const newSessionId =
+    typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID()
+      : `sess-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  sessionId = newSessionId;
+
+  try {
+    window.localStorage?.setItem(SESSION_STORAGE_KEY, sessionId);
+  } catch (error) {
+    console.warn("Unable to persist Orbii session ID", error);
+  }
+}
+
+console.log("Orbii session:", sessionId);
+
 function setChatOpen(open) {
   if (!chatEl) return;
   chatEl.classList.toggle("is-open", open);
@@ -43,7 +71,7 @@ formEl?.addEventListener("submit", async (event) => {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text, sessionId }),
     });
 
     if (!response.ok) {
