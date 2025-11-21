@@ -10,6 +10,119 @@ const studyStatusEl = document.getElementById("orbii-study-status");
 const sessionResetBtn = document.getElementById("orbii-session-reset");
 const quizStartBtn = document.getElementById("orbii-quiz-start");
 const pdfInput = document.getElementById("pdf-input");
+const homeScreen = document.getElementById("orbii-home");
+const studyScreen = document.getElementById("orbii-study-screen");
+const roadmapScreen = document.getElementById("orbii-roadmap-screen");
+const goToStudyButton = document.getElementById("go-to-study-button");
+const backToHomeFromStudy = document.getElementById("back-to-home-from-study");
+const createRoadmapButton = document.getElementById("create-roadmap-button");
+const backToHomeFromRoadmap = document.getElementById("back-to-home-from-roadmap");
+const roadmapTopicInput = document.getElementById("roadmap-topic-input");
+const roadmapTopicTitle = document.getElementById("roadmap-topic-title");
+const roadmapTopic = document.getElementById("roadmap-topic");
+const roadmapContent = document.getElementById("roadmap-content");
+const topicError = document.getElementById("topic-error");
+const pdfjsLib =
+  typeof window !== "undefined"
+    ? window["pdfjsLib"] || window.pdfjsLib || null
+    : null;
+
+function showView(view) {
+  homeScreen?.classList.add("hidden");
+  studyScreen?.classList.add("hidden");
+  roadmapScreen?.classList.add("hidden");
+
+  if (view === "home") homeScreen?.classList.remove("hidden");
+  if (view === "study") studyScreen?.classList.remove("hidden");
+  if (view === "roadmap") roadmapScreen?.classList.remove("hidden");
+}
+
+function setTopicError(message) {
+  if (!topicError) return;
+  if (message) {
+    topicError.textContent = message;
+    topicError.classList.remove("hidden");
+  } else {
+    topicError.textContent = "";
+    topicError.classList.add("hidden");
+  }
+}
+
+function renderRoadmapStatus(message) {
+  if (!roadmapContent) return;
+  roadmapContent.innerHTML = "";
+  const status = document.createElement("p");
+  status.className = "roadmap-status";
+  status.textContent = message;
+  roadmapContent.appendChild(status);
+}
+
+function renderRoadmap(roadmap) {
+  if (!roadmapContent) return;
+  roadmapContent.innerHTML = "";
+
+  const overview =
+    roadmap && typeof roadmap.overview === "string"
+      ? roadmap.overview.trim()
+      : "";
+  if (overview) {
+    const overviewEl = document.createElement("p");
+    overviewEl.className = "roadmap-overview";
+    overviewEl.textContent = overview;
+    roadmapContent.appendChild(overviewEl);
+  }
+
+  const sections = Array.isArray(roadmap?.sections) ? roadmap.sections : [];
+  if (!sections.length) {
+    const status = document.createElement("p");
+    status.className = "roadmap-status";
+    status.textContent = "No roadmap data available.";
+    roadmapContent.appendChild(status);
+    return;
+  }
+
+  sections.forEach((section) => {
+    const card = document.createElement("div");
+    card.className = "roadmap-section";
+
+    const title = document.createElement("h3");
+    title.className = "roadmap-section-title";
+    title.textContent =
+      typeof section?.title === "string" && section.title.trim()
+        ? section.title
+        : "Section";
+    card.appendChild(title);
+
+    if (typeof section?.summary === "string" && section.summary.trim()) {
+      const summary = document.createElement("p");
+      summary.className = "roadmap-section-summary";
+      summary.textContent = section.summary;
+      card.appendChild(summary);
+    }
+
+    const steps = Array.isArray(section?.steps) ? section.steps : [];
+    if (steps.length) {
+      const list = document.createElement("ul");
+      list.className = "roadmap-step-list";
+      steps.forEach((step) => {
+        if (typeof step !== "string" || !step.trim()) return;
+        const li = document.createElement("li");
+        li.textContent = step.trim();
+        list.appendChild(li);
+      });
+      card.appendChild(list);
+    }
+
+    roadmapContent.appendChild(card);
+  });
+}
+
+showView("home");
+
+if (pdfjsLib?.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
+}
 
 const SESSION_STORAGE_KEY = "orbii-session-id";
 const STUDY_STATUS_DEFAULT_MESSAGE =
@@ -18,6 +131,9 @@ const ORBII_ASSISTANT_GREETING =
   '👋 I\'m Orbii, your friendly study buddy. Paste some study text above, then ask me questions or say "quiz me" and I\'ll help you learn.';
 const QUIZ_PROMPT_MESSAGE =
   "I'd like you to quiz me on my current study text. Please ask me one short question at a time.";
+const MAX_PDF_PAGES_TO_READ = 5;
+const MAX_PDF_CHARACTERS = 10000;
+const MIN_PDF_TEXT_LENGTH = 20;
 let sessionId;
 
 function createNewSessionId() {
@@ -117,6 +233,72 @@ function resetOrbiiSession() {
   console.log("Orbii session:", sessionId);
 }
 
+// Try window global first, then dynamic import as a fallback.
+async function extractTextFromPdf(file) {
+  let activePdfjsLib =
+    window["pdfjsLib"] ||
+    window.pdfjsLib ||
+    window["pdfjs-dist/build/pdf"] ||
+    window["pdfjs-dist/build/pdf.min"];
+
+  if (!activePdfjsLib || typeof activePdfjsLib.getDocument !== "function") {
+    try {
+      const mod = await import(
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.mjs"
+      );
+      const imported =
+        mod && typeof mod.getDocument === "function"
+          ? mod
+          : mod?.default && typeof mod.default.getDocument === "function"
+            ? mod.default
+            : null;
+      if (imported) {
+        activePdfjsLib = imported;
+        window.pdfjsLib = imported;
+      }
+    } catch (error) {
+      console.error("Failed to dynamically import pdf.js", error);
+    }
+  }
+
+  if (!activePdfjsLib || typeof activePdfjsLib.getDocument !== "function") {
+    console.error("pdfjsLib.getDocument is not available after attempting to load pdf.js.");
+    throw new Error("PDF reader unavailable");
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await activePdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const totalPages = typeof pdf.numPages === "number" ? pdf.numPages : 0;
+  const safeTotalPages = Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 0;
+  const pagesToRead = Math.min(safeTotalPages, MAX_PDF_PAGES_TO_READ);
+  const chunks = [];
+
+  for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item) => (item && typeof item.str === "string" ? item.str : ""))
+      .join(" ")
+      .trim();
+    if (pageText) {
+      chunks.push(pageText);
+    }
+  }
+
+  let combined = chunks.join("\n\n").trim();
+  const truncated = combined.length > MAX_PDF_CHARACTERS;
+  if (truncated) {
+    combined = combined.slice(0, MAX_PDF_CHARACTERS);
+  }
+
+  return {
+    text: combined,
+    pagesRead: pagesToRead,
+    totalPages,
+    truncated,
+  };
+}
+
 toggleBtn?.addEventListener("click", () => {
   const isOpen = chatEl?.classList.contains("is-open");
   setChatOpen(!isOpen);
@@ -149,16 +331,58 @@ quizStartBtn?.addEventListener("click", async (event) => {
   await sendOrbiiMessage(text);
 });
 
-// Handle PDF selection so future steps can process it server-side.
-pdfInput?.addEventListener("change", (event) => {
+// Handle PDF selection so we can extract text locally before saving.
+pdfInput?.addEventListener("change", async (event) => {
   const input = event.target;
-  const file = input.files?.[0];
-  if (!file || file.type !== "application/pdf") {
-    alert("Please select a PDF file.");
+  const file = input?.files?.[0];
+
+  if (!file) {
+    setStudyStatus("No PDF selected.");
+    return;
+  }
+  if (file.type && file.type !== "application/pdf") {
+    setStudyStatus("That file is not a PDF. Please choose a PDF to load.");
     input.value = "";
     return;
   }
-  console.log(`Orbii PDF upload: ${file.name}, size: ${file.size} bytes`);
+  if (!pdfjsLib) {
+    console.warn("PDF.js failed to load.");
+    setStudyStatus("PDF reader unavailable. Please reload the page and try again.");
+    return;
+  }
+
+  setStudyStatus("Reading PDF…");
+
+  try {
+    const { text, pagesRead, totalPages, truncated } = await extractTextFromPdf(file);
+    const characters = text.length;
+
+    if (!text || characters < MIN_PDF_TEXT_LENGTH) {
+      if (studyTextEl) {
+        studyTextEl.value = "";
+      }
+      setStudyStatus("I couldn't find readable text in that PDF. It might be a scanned image.");
+      return;
+    }
+
+    if (studyTextEl) {
+      studyTextEl.value = text;
+    }
+
+    const pagesLabel =
+      pagesRead && totalPages
+        ? `${pagesRead}${pagesRead !== totalPages ? `/${totalPages}` : ""} page${pagesRead === 1 ? "" : "s"}`
+        : `${pagesRead || 0} page${pagesRead === 1 ? "" : "s"}`;
+
+    let statusMessage = `Loaded text from PDF: ${characters} characters (${pagesLabel}).`;
+    if (truncated) {
+      statusMessage += " Truncated to keep things responsive.";
+    }
+    setStudyStatus(statusMessage);
+  } catch (error) {
+    console.error("Failed to extract text from PDF", error);
+    setStudyStatus("Could not read that PDF, please try another file.");
+  }
 });
 
 studyForm?.addEventListener("submit", async (event) => {
@@ -211,3 +435,58 @@ studyForm?.addEventListener("submit", async (event) => {
 if (window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
   setChatOpen(true);
 }
+
+goToStudyButton?.addEventListener("click", () => showView("study"));
+backToHomeFromStudy?.addEventListener("click", () => showView("home"));
+
+createRoadmapButton?.addEventListener("click", async () => {
+  const topic = roadmapTopicInput?.value.trim() ?? "";
+  if (!topic) {
+    setTopicError("Please enter a topic first.");
+    return;
+  }
+
+  setTopicError("");
+  if (roadmapTopic) {
+    roadmapTopic.textContent = topic;
+  } else if (roadmapTopicTitle) {
+    roadmapTopicTitle.textContent = `Roadmap for: ${topic}`;
+  }
+
+  showView("roadmap");
+  renderRoadmapStatus("Loading roadmap...");
+  if (createRoadmapButton) {
+    createRoadmapButton.disabled = true;
+  }
+
+  try {
+    const response = await fetch("/api/roadmap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Roadmap request failed with status ${response.status}`);
+    }
+
+    const roadmap = await response.json();
+    renderRoadmap(roadmap);
+  } catch (error) {
+    console.error("Failed to fetch roadmap", error);
+    renderRoadmapStatus(
+      "Sorry, I couldn't generate a roadmap right now. Please try again in a moment.",
+    );
+  } finally {
+    if (createRoadmapButton) {
+      createRoadmapButton.disabled = false;
+    }
+  }
+});
+
+backToHomeFromRoadmap?.addEventListener("click", () => showView("home"));
+
+// View modes:
+// - "home": orb hero + roadmap input + Study with me button
+// - "study": existing study text + chat UI
+// - "roadmap": placeholder for future interactive roadmap built from the topic

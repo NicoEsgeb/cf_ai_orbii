@@ -16,6 +16,19 @@ export interface Env {
 }
 
 const MAX_STUDY_TEXT_LENGTH = 20000;
+const CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+
+type RoadmapSection = {
+  title: string;
+  summary: string;
+  steps: string[];
+};
+
+type RoadmapResponse = {
+  topic: string;
+  overview: string;
+  sections: RoadmapSection[];
+};
 
 export default {
   async fetch(
@@ -53,6 +66,10 @@ export default {
 
       const stub = getChatSessionStub(env, sessionId);
       return stub.fetch(request);
+    }
+
+    if (url.pathname === "/api/roadmap" && request.method === "POST") {
+      return handleRoadmapRequest(request, env);
     }
 
     if (url.pathname === "/api/study-text" && request.method === "POST") {
@@ -160,4 +177,64 @@ function normalizeSessionId(sessionId: unknown): string {
 function getChatSessionStub(env: Env, sessionId: string) {
   const id = env.CHAT_SESSIONS.idFromName(sessionId);
   return env.CHAT_SESSIONS.get(id);
+}
+
+async function handleRoadmapRequest(request: Request, env: Env): Promise<Response> {
+  let topic: string;
+  try {
+    const body = (await request.clone().json()) as { topic?: unknown };
+    topic = typeof body.topic === "string" ? body.topic.trim() : "";
+  } catch {
+    return new Response(JSON.stringify({ error: "Missing topic" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (!topic) {
+    return new Response(JSON.stringify({ error: "Missing topic" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const prompt = [
+    "You are Orbii, a friendly study guide.",
+    "Given a topic and that this is for a beginner, output a short study roadmap.",
+    "Use the exact JSON structure:",
+    `{"topic": "string", "overview": "string", "sections": [{"title": "string", "summary": "string", "steps": ["string"]}]}`,
+    "Limit to about 3-6 sections and 3-6 steps per section.",
+    "Return only JSON, no backticks or extra text.",
+    `Topic: ${topic}`,
+  ].join("\n");
+
+  try {
+    const aiResult = (await (env.AI as any).run(CHAT_MODEL, {
+      messages: [{ role: "user", content: prompt }],
+    })) as { response?: string };
+
+    const raw = (aiResult?.response ?? "").toString().trim();
+    if (!raw) {
+      throw new Error("Empty AI response");
+    }
+
+    let parsed: RoadmapResponse;
+    try {
+      parsed = JSON.parse(raw) as RoadmapResponse;
+    } catch (parseError) {
+      console.error("Roadmap JSON parse failed; raw output:", raw);
+      throw parseError;
+    }
+
+    return new Response(JSON.stringify(parsed), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("Failed to generate roadmap:", error);
+    return new Response(JSON.stringify({ error: "Failed to parse roadmap from AI" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }

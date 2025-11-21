@@ -7,87 +7,133 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <div class="orbii-wrapper">
-      <button
-        class="orbii-orb"
-        id="orbii-toggle"
-        type="button"
-        aria-label="Open Orbii chat"
-      ></button>
-      <div class="orbii-text">
-        <h1>Orbii</h1>
-        <p>Your ethereal study buddy, powered by Cloudflare Workers AI.</p>
-        <p class="orbii-note">
-          Paste study text below, chat about it, or tap "Quiz me on this" anytime.
-        </p>
-      </div>
-    </div>
-
-    <section class="orbii-study-panel">
-      <h2>Feed Orbii your study text</h2>
-      <form id="orbii-study-form">
-        <label for="pdf-input" class="orbii-pdf-label">Upload PDF (experimental)</label>
-        <input type="file" id="pdf-input" accept="application/pdf" />
-        <textarea
-          id="orbii-study-text"
-          placeholder="Paste the study material you want Orbii to remember..."
-          rows="6"
-        ></textarea>
-        <button type="submit">Save to Orbii</button>
-      </form>
-      <p class="orbii-study-status" id="orbii-study-status">
-        Paste text and click save to keep it with this session.
-      </p>
-      <div class="orbii-study-actions">
-        <button
-          type="button"
-          id="orbii-quiz-start"
-          class="orbii-secondary-button"
-          aria-label="Ask Orbii to quiz you on your study text"
-        >
-          Quiz me on this
-        </button>
-        <button
-          type="button"
-          id="orbii-session-reset"
-          class="orbii-session-reset orbii-secondary-button"
-          aria-label="Start a new Orbii session"
-        >
-          Start a new session
-        </button>
-      </div>
-    </section>
-
-    <div class="orbii-chat" id="orbii-chat">
-      <div class="orbii-chat-header">
-        <span>Orbii study chat</span>
-        <button
-          class="orbii-chat-close"
-          id="orbii-close"
-          type="button"
-          aria-label="Close chat"
-        >
-          ×
-        </button>
-      </div>
-      <div class="orbii-chat-messages" id="orbii-messages">
-        <div class="orbii-message orbii-message-assistant">
-          👋 I'm Orbii, your friendly study buddy. Paste some study text above,
-          then ask me questions or say "quiz me" and I'll help you learn.
+    <main class="orbii-main">
+      <div id="orbii-home" class="orbii-home">
+        <div class="orbii-wrapper">
+          <button
+            class="orbii-orb"
+            id="orbii-toggle"
+            type="button"
+            aria-label="Open Orbii chat"
+          ></button>
+          <div class="orbii-text">
+            <h1>Orbii</h1>
+            <p class="orbii-intro">Your ethereal study buddy, powered by Cloudflare Workers AI.</p>
+            <p class="orbii-subtitle">What do you want to learn today?</p>
+          </div>
+        </div>
+        <div class="orbii-home-actions">
+          <label for="roadmap-topic-input">What do you want to learn?</label>
+          <input
+            id="roadmap-topic-input"
+            type="text"
+            placeholder="e.g. Minerals, binary search, Java basics…"
+          />
+          <p id="topic-error" class="input-error hidden">Please enter a topic first.</p>
+          <button id="create-roadmap-button" class="primary-button" type="button">
+            Create the roadmap
+          </button>
+          <button id="go-to-study-button" class="secondary-button" type="button">
+            Study with me
+          </button>
         </div>
       </div>
-      <form class="orbii-chat-input" id="orbii-form">
-        <input
-          id="orbii-input"
-          type="text"
-          autocomplete="off"
-          placeholder="Ask Orbii something..."
-          required
-        />
-        <button type="submit">Send</button>
-      </form>
-    </div>
 
+      <section id="orbii-study-screen" class="orbii-study-screen hidden">
+        <div class="orbii-study-panel">
+          <button id="back-to-home-from-study" class="secondary-button back-link" type="button">
+            ← Back to home
+          </button>
+          <h2>Feed Orbii your study text</h2>
+          <form id="orbii-study-form">
+            <label for="pdf-input" class="orbii-pdf-label">Upload PDF (experimental)</label>
+            <input type="file" id="pdf-input" accept="application/pdf" />
+            <textarea
+              id="orbii-study-text"
+              placeholder="Paste the study material you want Orbii to remember..."
+              rows="6"
+            ></textarea>
+            <button type="submit">Save to Orbii</button>
+          </form>
+          <p class="orbii-study-status" id="orbii-study-status">
+            Paste text and click save to keep it with this session.
+          </p>
+          <div class="orbii-study-actions">
+            <button
+              type="button"
+              id="orbii-quiz-start"
+              class="orbii-secondary-button"
+              aria-label="Ask Orbii to quiz you on your study text"
+            >
+              Quiz me on this
+            </button>
+            <button
+              type="button"
+              id="orbii-session-reset"
+              class="orbii-session-reset orbii-secondary-button"
+              aria-label="Start a new Orbii session"
+            >
+              Start a new session
+            </button>
+          </div>
+        </div>
+
+        <div class="orbii-chat" id="orbii-chat">
+          <div class="orbii-chat-header">
+            <span>Orbii study chat</span>
+            <button
+              class="orbii-chat-close"
+              id="orbii-close"
+              type="button"
+              aria-label="Close chat"
+            >
+              ×
+            </button>
+          </div>
+          <div class="orbii-chat-messages" id="orbii-messages">
+            <div class="orbii-message orbii-message-assistant">
+              👋 I'm Orbii, your friendly study buddy. Paste some study text above,
+              then ask me questions or say "quiz me" and I'll help you learn.
+            </div>
+          </div>
+          <form class="orbii-chat-input" id="orbii-form">
+            <input
+              id="orbii-input"
+              type="text"
+              autocomplete="off"
+              placeholder="Ask Orbii something..."
+              required
+            />
+            <button type="submit">Send</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="orbii-roadmap-screen" class="orbii-roadmap-screen hidden">
+        <div class="roadmap-card">
+          <div class="roadmap-header">
+            <h2 id="roadmap-topic-title">
+              Roadmap for: <span id="roadmap-topic"></span>
+            </h2>
+            <button id="back-to-home-from-roadmap" class="secondary-button" type="button">
+              Back to home
+            </button>
+          </div>
+          <div id="roadmap-placeholder" class="roadmap-placeholder">
+            <div id="roadmap-content" class="roadmap-content">
+              <p class="roadmap-status">Roadmap view coming soon…</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"
+      integrity="sha512-ljaMCxg7RL4tQQGHxtl3NxpMddHHv2u7o1JLOdSd3qdOaf1HFMGwhOkdxyfB6Bah+5/mghKXCnJLQ2L3cp598g=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
