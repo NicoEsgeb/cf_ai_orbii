@@ -18,6 +18,19 @@ export interface Env {
 const MAX_STUDY_TEXT_LENGTH = 20000;
 const CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
+type RoadmapNode = {
+  id: string;
+  title: string;
+  summary: string;
+  level: number;
+};
+
+type RoadmapEdge = {
+  from: string;
+  to: string;
+  reason: string;
+};
+
 type RoadmapSection = {
   title: string;
   summary: string;
@@ -27,7 +40,9 @@ type RoadmapSection = {
 type RoadmapResponse = {
   topic: string;
   overview: string;
-  sections: RoadmapSection[];
+  nodes?: RoadmapNode[];
+  edges?: RoadmapEdge[];
+  sections?: RoadmapSection[];
 };
 
 export default {
@@ -179,6 +194,116 @@ function getChatSessionStub(env: Env, sessionId: string) {
   return env.CHAT_SESSIONS.get(id);
 }
 
+function buildRoadmapPrompt(topic: string): string {
+  return [
+    "You are Orbii, a friendly but expert curriculum designer building a self-paced mini-course for an absolute beginner.",
+    "Design a modern learning roadmap the learner can actually follow step by step.",
+    "Structure it as a path that goes through four phases: [FOUNDATIONS], [CORE SKILLS], [APPLICATIONS], [REFLECTION & NEXT STEPS].",
+    "Each phase is one or more sections. Put the phase name in square brackets at the start of the section title.",
+    "",
+    "Use exactly this plain text format, one line per item:",
+    "OVERVIEW: <1–2 sentence overview of what the learner will be able to do after finishing the roadmap>",
+    "SECTION: <short section title with phase tag> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "",
+    "Step format:",
+    "- Each step must be a concrete 25–60 minute task starting with a verb.",
+    "- For at least two steps in every section, append one high-quality resource in this exact pattern at the end of the step: [LINK: <short label> - https://...].",
+    "- Prefer well-known beginner-friendly sources such as Khan Academy, 3Blue1Brown, MIT OCW, Brilliant, official docs, or other reputable sites.",
+    "",
+    "Rules:",
+    "- Respond using ONLY plain text lines starting with OVERVIEW: or SECTION: (no bullet points, no numbering, no extra commentary).",
+    "- Write 5 to 8 SECTION lines total, ordered from easiest concepts first to more advanced and project-style work last.",
+    "- Each summary is one short sentence.",
+    "- Each section has 3 to 5 steps.",
+    "- Do not put the '|' or ';' characters inside titles, summaries, or step text. Use ';' only between steps.",
+    "- Inside URLs, do not include '|' or ';'.",
+    "- Include at least one small project-style section in the [APPLICATIONS] phase and one reflection / revision section in the [REFLECTION & NEXT STEPS] phase.",
+    `Topic: ${topic}`,
+    "Now write the OVERVIEW: line and the SECTION: lines.",
+  ].join("\\n");
+}
+
+function parseRoadmapFromText(raw: string, topic: string): RoadmapResponse {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  let overview = "";
+  const sections: RoadmapSection[] = [];
+
+  for (const line of lines) {
+    const upper = line.toUpperCase();
+
+    if (!overview && upper.startsWith("OVERVIEW:")) {
+      overview = line.slice("OVERVIEW:".length).trim();
+      continue;
+    }
+
+    if (upper.startsWith("SECTION:")) {
+      const rest = line.slice("SECTION:".length).trim();
+      if (!rest) continue;
+
+      const parts = rest.split("|").map((part) => part.trim());
+      const title = parts[0] ?? "";
+      let summary = parts[1] ?? "";
+      let stepsPart = parts[2] ?? "";
+
+      if (!stepsPart && summary.includes(";")) {
+        const summaryPieces = summary
+          .split(";")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+
+        summary = summaryPieces.shift() ?? "";
+        if (!stepsPart && summaryPieces.length > 0) {
+          stepsPart = summaryPieces.join(" ; ");
+        }
+      }
+
+      if (!title) continue;
+
+      const steps = stepsPart
+        ? stepsPart
+            .split(";")
+            .map((step) => step.trim())
+            .filter((step) => step.length > 0)
+        : [];
+
+      const hasSummary = summary.trim().length > 0;
+      const hasSteps = steps.length > 0;
+      if (!hasSummary && !hasSteps) continue;
+
+      sections.push({
+        title,
+        summary,
+        steps,
+      });
+    }
+  }
+
+  if (!overview) {
+    overview = `A beginner-friendly roadmap for ${topic}.`;
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      title: `Getting started with ${topic}`,
+      summary: `Kick off your learning about ${topic}.`,
+      steps: [
+        `Find a beginner-friendly introduction to ${topic} (article or video).`,
+        `Note down 3–5 key ideas about ${topic}.`,
+      ],
+    });
+  }
+
+  return {
+    topic,
+    overview,
+    sections,
+  };
+}
+
 async function handleRoadmapRequest(request: Request, env: Env): Promise<Response> {
   let topic: string;
   try {
@@ -198,41 +323,30 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
     });
   }
 
-  const prompt = [
-    "You are Orbii, a friendly study guide.",
-    "Given a topic and that this is for a beginner, output a short study roadmap.",
-    "Use the exact JSON structure:",
-    `{"topic": "string", "overview": "string", "sections": [{"title": "string", "summary": "string", "steps": ["string"]}]}`,
-    "Limit to about 3-6 sections and 3-6 steps per section.",
-    "Return only JSON, no backticks or extra text.",
-    `Topic: ${topic}`,
-  ].join("\n");
+  console.log("Generating roadmap for topic:", topic);
 
+  let raw: string | undefined;
   try {
+    const prompt = buildRoadmapPrompt(topic);
     const aiResult = (await (env.AI as any).run(CHAT_MODEL, {
       messages: [{ role: "user", content: prompt }],
     })) as { response?: string };
 
-    const raw = (aiResult?.response ?? "").toString().trim();
-    if (!raw) {
-      throw new Error("Empty AI response");
-    }
+    const rawCandidate =
+      typeof aiResult === "string"
+        ? aiResult
+        : (aiResult?.response ?? JSON.stringify(aiResult));
+    raw = (rawCandidate ?? "").toString();
 
-    let parsed: RoadmapResponse;
-    try {
-      parsed = JSON.parse(raw) as RoadmapResponse;
-    } catch (parseError) {
-      console.error("Roadmap JSON parse failed; raw output:", raw);
-      throw parseError;
-    }
+    const roadmap = parseRoadmapFromText(raw, topic);
 
-    return new Response(JSON.stringify(parsed), {
+    return new Response(JSON.stringify(roadmap), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Failed to generate roadmap:", error);
-    return new Response(JSON.stringify({ error: "Failed to parse roadmap from AI" }), {
+    console.error("Roadmap generation failed; raw output:", raw, error);
+    return new Response(JSON.stringify({ error: "roadmap_generation_error" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });

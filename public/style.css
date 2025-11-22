@@ -337,14 +337,29 @@ body {
 .roadmap-placeholder {
   min-height: 180px;
   display: flex;
+  flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
+  gap: 1rem;
   text-align: left;
   border: 1px dashed rgba(148, 163, 184, 0.4);
   border-radius: 1rem;
   padding: 2rem;
   color: #cbd5f5;
   font-size: 0.95rem;
+}
+
+.roadmap-graph {
+  width: 100%;
+  min-height: 320px;
+  border-radius: 1rem;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  background: radial-gradient(circle at 20% 20%, rgba(34, 211, 238, 0.14), transparent 35%),
+    radial-gradient(circle at 80% 10%, rgba(34, 197, 94, 0.12), transparent 30%),
+    rgba(5, 8, 22, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
 }
 
 .roadmap-content {
@@ -400,6 +415,22 @@ body {
   gap: 0.35rem;
   color: #d1d5db;
   font-size: 0.9rem;
+}
+
+.roadmap-step-item {
+  line-height: 1.4;
+}
+
+.roadmap-step-link {
+  color: #7dd3fc;
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.roadmap-step-link:hover,
+.roadmap-step-link:focus-visible {
+  text-decoration: none;
+  color: #a5f3fc;
 }
 
 .hidden {

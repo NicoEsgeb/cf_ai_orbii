@@ -21,6 +21,7 @@ const roadmapTopicInput = document.getElementById("roadmap-topic-input");
 const roadmapTopicTitle = document.getElementById("roadmap-topic-title");
 const roadmapTopic = document.getElementById("roadmap-topic");
 const roadmapContent = document.getElementById("roadmap-content");
+const roadmapGraphContainer = document.getElementById("roadmap-container");
 const topicError = document.getElementById("topic-error");
 const pdfjsLib =
   typeof window !== "undefined"
@@ -57,6 +58,36 @@ function renderRoadmapStatus(message) {
   roadmapContent.appendChild(status);
 }
 
+function parseRoadmapStep(stepText) {
+  if (typeof stepText !== "string") {
+    return { text: "", url: null, label: null };
+  }
+
+  const raw = stepText.trim();
+  if (!raw) {
+    return { text: "", url: null, label: null };
+  }
+
+  // Look for our [LINK: label - https://...] pattern
+  const linkMatch = raw.match(/\[LINK:\s*([^-\]]+)-\s*(https?:\/\/[^\]]+)\]/i);
+  if (!linkMatch) {
+    return { text: raw, url: null, label: null };
+  }
+
+  const before = raw.slice(0, linkMatch.index).trim();
+  const label = linkMatch[1].trim();
+  const url = linkMatch[2].trim();
+
+  // Strip a trailing colon/dash from the description if present
+  const cleanedText = before.replace(/[-–:]\s*$/, "").trim();
+
+  return {
+    text: cleanedText || label || raw,
+    url,
+    label: label || url,
+  };
+}
+
 function renderRoadmap(roadmap) {
   if (!roadmapContent) return;
   roadmapContent.innerHTML = "";
@@ -72,7 +103,7 @@ function renderRoadmap(roadmap) {
     roadmapContent.appendChild(overviewEl);
   }
 
-  const sections = Array.isArray(roadmap?.sections) ? roadmap.sections : [];
+  const sections = extractRoadmapSections(roadmap);
   if (!sections.length) {
     const status = document.createElement("p");
     status.className = "roadmap-status";
@@ -106,14 +137,297 @@ function renderRoadmap(roadmap) {
       list.className = "roadmap-step-list";
       steps.forEach((step) => {
         if (typeof step !== "string" || !step.trim()) return;
+
+        const { text, url, label } = parseRoadmapStep(step);
+        if (!text && !url) return;
+
         const li = document.createElement("li");
-        li.textContent = step.trim();
+        li.className = "roadmap-step-item";
+
+        // Main description text
+        if (text) {
+          li.appendChild(document.createTextNode(text));
+        }
+
+        // Optional clickable resource link
+        if (url) {
+          li.appendChild(document.createTextNode(" "));
+
+          const link = document.createElement("a");
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = label || "Open resource";
+          link.className = "roadmap-step-link";
+
+          li.appendChild(link);
+        }
+
         list.appendChild(li);
       });
       card.appendChild(list);
     }
 
     roadmapContent.appendChild(card);
+  });
+}
+
+const CYTOSCAPE_CDN =
+  "https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.1/cytoscape.min.js";
+let cytoscapeLoader;
+let roadmapCy;
+
+function toLabel(value, fallback) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function toIdPart(value) {
+  return typeof value === "string"
+    ? value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 26)
+    : "";
+}
+
+function extractRoadmapSections(roadmap) {
+  // If the backend already returned sections in the right shape, prefer those.
+  const existingSections = Array.isArray(roadmap?.sections) ? roadmap.sections : [];
+  if (existingSections.length) {
+    return existingSections;
+  }
+
+  // Fallback: build sections from nodes + edges produced by the model.
+  const nodes = Array.isArray(roadmap?.nodes) ? roadmap.nodes : [];
+  const edges = Array.isArray(roadmap?.edges) ? roadmap.edges : [];
+
+  if (!nodes.length) {
+    return [];
+  }
+
+  const nodeById = new Map();
+  nodes.forEach((node) => {
+    if (!node || typeof node.id !== "string") return;
+    nodeById.set(node.id, node);
+  });
+
+  const stepsByFrom = new Map();
+  edges.forEach((edge) => {
+    if (!edge || typeof edge.from !== "string" || typeof edge.to !== "string") return;
+
+    const toNode = nodeById.get(edge.to);
+    const toTitle =
+      toNode && typeof toNode.title === "string" && toNode.title.trim()
+        ? toNode.title.trim()
+        : edge.to;
+
+    if (!toTitle) return;
+
+    const reason =
+      typeof edge.reason === "string" && edge.reason.trim()
+        ? edge.reason.trim()
+        : "";
+
+    const stepText = reason ? `${toTitle}: ${reason}` : toTitle;
+
+    if (!stepText) return;
+
+    if (!stepsByFrom.has(edge.from)) {
+      stepsByFrom.set(edge.from, []);
+    }
+    stepsByFrom.get(edge.from).push(stepText);
+  });
+
+  const sortedNodes = nodes.slice().sort((a, b) => {
+    const aLevel = typeof a.level === "number" ? a.level : 0;
+    const bLevel = typeof b.level === "number" ? b.level : 0;
+    if (aLevel !== bLevel) return aLevel - bLevel;
+
+    const aTitle = typeof a.title === "string" ? a.title : "";
+    const bTitle = typeof b.title === "string" ? b.title : "";
+    return aTitle.localeCompare(bTitle);
+  });
+
+  return sortedNodes.map((node, index) => {
+    const title =
+      typeof node.title === "string" && node.title.trim()
+        ? node.title.trim()
+        : `Node ${index + 1}`;
+
+    const summary =
+      typeof node.summary === "string" && node.summary.trim()
+        ? node.summary.trim()
+        : "";
+
+    const steps = stepsByFrom.get(node.id) || [];
+
+    return {
+      title,
+      summary,
+      steps,
+    };
+  });
+}
+
+function toShortLabel(label, max = 42) {
+  if (typeof label !== "string") return "";
+  const trimmed = label.trim();
+  if (trimmed.length <= max) return trimmed;
+  return trimmed.slice(0, max - 1).trimEnd() + "…";
+}
+
+function buildRoadmapElements(roadmap, topicLabel) {
+  const sections = extractRoadmapSections(roadmap);
+  const topicId = `topic-${toIdPart(topicLabel) || "center"}`;
+
+  const elements = [
+    {
+      data: {
+        id: topicId,
+        label: toShortLabel(topicLabel || "Topic"),
+        level: 0,
+      },
+    },
+  ];
+
+  sections.forEach((section, sectionIndex) => {
+    const rawSectionLabel = toLabel(section?.title, `Section ${sectionIndex + 1}`);
+    const sectionLabel = toShortLabel(rawSectionLabel, 40);
+    const sectionId = `section-${sectionIndex}-${toIdPart(rawSectionLabel) || sectionIndex}`;
+
+    elements.push({
+      data: { id: sectionId, label: sectionLabel, level: 1 },
+    });
+    elements.push({
+      data: { id: `${topicId}-to-${sectionId}`, source: topicId, target: sectionId },
+    });
+
+    const steps = Array.isArray(section?.steps) ? section.steps : [];
+    steps.forEach((step, stepIndex) => {
+      const rawStep = typeof step === "string" ? step : "";
+      const parsed = parseRoadmapStep(rawStep);
+      const baseLabel = parsed.text || parsed.label || `Step ${stepIndex + 1}`;
+      const stepLabel = toShortLabel(baseLabel, 42);
+      const stepId = `${sectionId}-step-${stepIndex}`;
+
+      elements.push({
+        data: { id: stepId, label: stepLabel, level: 2 },
+      });
+      elements.push({
+        data: { id: `${sectionId}-to-${stepId}`, source: sectionId, target: stepId },
+      });
+    });
+  });
+
+  return elements;
+}
+
+async function loadCytoscape() {
+  if (window.cytoscape) {
+    return window.cytoscape;
+  }
+
+  if (!cytoscapeLoader) {
+    cytoscapeLoader = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = CYTOSCAPE_CDN;
+      script.async = true;
+      script.onload = () => {
+        if (window.cytoscape) {
+          resolve(window.cytoscape);
+        } else {
+          reject(new Error("Cytoscape failed to load from CDN"));
+        }
+      };
+      script.onerror = () => reject(new Error("Could not load Cytoscape CDN script"));
+      document.head.appendChild(script);
+    });
+  }
+
+  return cytoscapeLoader;
+}
+
+async function renderRoadmapGraph(roadmap, topic) {
+  if (!roadmapGraphContainer) return;
+
+  roadmapGraphContainer.classList.remove("hidden");
+  roadmapGraphContainer.innerHTML = "";
+
+  let cytoscape;
+  try {
+    cytoscape = await loadCytoscape();
+  } catch (error) {
+    console.error("Unable to load Cytoscape", error);
+    return;
+  }
+
+  const topicLabel = toLabel(topic || roadmap?.topic, "Git basics");
+  const elements = buildRoadmapElements(roadmap, topicLabel);
+
+  if (roadmapCy) {
+    roadmapCy.destroy();
+  }
+
+  roadmapCy = cytoscape({
+    container: roadmapGraphContainer,
+    elements,
+    layout: {
+      name: "concentric",
+      padding: 32,
+      minNodeSpacing: 32,
+      startAngle: (3 / 2) * Math.PI,
+      sweep: 2 * Math.PI,
+      concentric: (node) => {
+        const level = typeof node.data("level") === "number" ? node.data("level") : 2;
+        return 3 - level;
+      },
+      levelWidth: () => 1,
+    },
+    style: [
+      {
+        selector: "node",
+        style: {
+          label: "data(label)",
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-wrap": "wrap",
+          "text-max-width": "90px",
+          "font-size": "11px",
+          "background-color": "#22d3ee",
+          color: "#0f172a",
+          width: "46px",
+          height: "46px",
+          "border-color": "#0ea5e9",
+          "border-width": 2,
+          "text-outline-color": "#e0f2fe",
+          "text-outline-width": 1,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          width: 2,
+          "line-color": "#94a3b8",
+          "target-arrow-color": "#94a3b8",
+          "target-arrow-shape": "triangle",
+          "curve-style": "bezier",
+        },
+      },
+      {
+        selector: ":selected",
+        style: {
+          "border-width": 3,
+          "border-color": "#22c55e",
+        },
+      },
+    ],
+  });
+
+  roadmapCy.on("tap", "node", (event) => {
+    const data = event.target.data();
+    console.log("Roadmap node selected:", data);
+    alert(data?.label ? `Selected: ${data.label}` : `Selected node ${data.id}`);
   });
 }
 
@@ -472,6 +786,7 @@ createRoadmapButton?.addEventListener("click", async () => {
 
     const roadmap = await response.json();
     renderRoadmap(roadmap);
+    await renderRoadmapGraph(roadmap, topic);
   } catch (error) {
     console.error("Failed to fetch roadmap", error);
     renderRoadmapStatus(
