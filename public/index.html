@@ -112,17 +112,26 @@
       <section id="orbii-roadmap-screen" class="orbii-roadmap-screen hidden">
         <div class="roadmap-card">
           <div class="roadmap-header">
-            <h2 id="roadmap-topic-title">
-              Roadmap for: <span id="roadmap-topic"></span>
-            </h2>
             <button id="back-to-home-from-roadmap" class="secondary-button" type="button">
-              Back to home
+              ← Back
             </button>
+            <div class="roadmap-title-stack">
+              <p class="roadmap-eyebrow">Interactive roadmap</p>
+              <h2 id="roadmap-topic-title">
+                Roadmap for <span id="roadmap-topic"></span>
+              </h2>
+            </div>
           </div>
-          <div class="roadmap-main-grid">
-            <div id="roadmap-container" class="roadmap-graph"></div>
+          <div id="roadmap-root" class="roadmap-main-grid roadmap-main-panel">
+            <div class="roadmap-main-panel-left">
+              <div id="roadmap-graph" class="roadmap-graph"></div>
+            </div>
 
-            <aside class="roadmap-detail-shell">
+            <aside class="roadmap-main-panel-right roadmap-detail-shell">
+              <div class="roadmap-detail-header">
+                <p class="roadmap-detail-kicker">Step details</p>
+                <p class="roadmap-detail-hint">Choose a node to see the focused plan.</p>
+              </div>
               <div id="roadmap-content" class="roadmap-content">
                 <p class="roadmap-status">
                   Select a step on the left to see what to do there.

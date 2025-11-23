@@ -21,7 +21,8 @@ const roadmapTopicInput = document.getElementById("roadmap-topic-input");
 const roadmapTopicTitle = document.getElementById("roadmap-topic-title");
 const roadmapTopic = document.getElementById("roadmap-topic");
 const roadmapContent = document.getElementById("roadmap-content");
-const roadmapGraphContainer = document.getElementById("roadmap-container");
+const roadmapGraphContainer =
+  document.getElementById("roadmap-graph") || document.getElementById("roadmap-container");
 const topicError = document.getElementById("topic-error");
 const pdfjsLib =
   typeof window !== "undefined"
@@ -209,6 +210,11 @@ function renderRoadmap(roadmap, selectedSectionId) {
 
     roadmapContent.appendChild(card);
   });
+
+  const activeCard = defaultSectionId ? document.getElementById(defaultSectionId) : null;
+  if (activeCard && selectedSectionId) {
+    activeCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 const CYTOSCAPE_CDN =
@@ -217,6 +223,7 @@ let cytoscapeLoader;
 let roadmapCy;
 let currentRoadmap = null;
 let currentSelectedSectionId = null;
+let roadmapResizeTimeout;
 
 function toLabel(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -387,21 +394,29 @@ function toShortLabel(label, max = 42) {
   return trimmed.slice(0, max - 1).trimEnd() + "…";
 }
 
-function categoryShortLabel(category) {
-  switch (category) {
-    case "FOUNDATIONS":
-      return "Foundations";
-    case "CORE_SKILLS":
-      return "Core Skills";
-    case "PROJECT":
-      return "Project";
-    case "NEXT_STEPS":
-      return "Next Steps";
-    case "BRANCH":
-      return "Branch";
-    default:
-      return "Section";
+function deriveSectionLabel(section, index, category) {
+  const fullTitle = toLabel(section?.title, `Section ${index + 1}`);
+  const baseNumber = index + 1;
+
+  const strippedTitle = fullTitle
+    .replace(/^\d+[\.\)]\s*/, "")
+    .replace(/^(section|step)\s+\d+[:\-]?\s*/i, "")
+    .trim();
+  const leadingIdea = strippedTitle.split(/[-–:]/)[0].trim() || strippedTitle;
+
+  if (category === "BRANCH") {
+    const branchTitle = toLabel(section?.branchLabel, leadingIdea || fullTitle);
+    return {
+      fullTitle,
+      shortLabel: toShortLabel(branchTitle, 26),
+    };
   }
+
+  const compact = leadingIdea || fullTitle;
+  return {
+    fullTitle,
+    shortLabel: toShortLabel(`${baseNumber}. ${compact}`, 34),
+  };
 }
 
 function buildRoadmapElements(roadmap, topicLabel) {
@@ -412,7 +427,7 @@ function buildRoadmapElements(roadmap, topicLabel) {
     {
       data: {
         id: topicId,
-        label: toShortLabel(topicLabel || "Topic"),
+        label: toShortLabel(topicLabel || "Topic", 26),
         level: 0,
       },
     },
@@ -432,16 +447,19 @@ function buildRoadmapElements(roadmap, topicLabel) {
   };
 
   const mainEntries = mainPath.map((section, sectionIndex) => {
-    const title = toLabel(section?.title, `Section ${sectionIndex + 1}`);
     const category = normalizeSectionCategory(section?.category);
-    const categoryLabel = categoryShortLabel(category);
-    const labelPrefix = `${sectionIndex + 1}. ${categoryLabel}`;
-    const fullLabel = `${labelPrefix} – ${title}`;
-    const safeLabel = toShortLabel(fullLabel, 70);
+    const { fullTitle, shortLabel } = deriveSectionLabel(section, sectionIndex, category);
     const sectionId = getSectionDomId(section);
 
     elements.push({
-      data: { id: sectionId, label: safeLabel, level: 1, category, sectionId },
+      data: {
+        id: sectionId,
+        label: shortLabel,
+        fullTitle,
+        level: 1,
+        category,
+        sectionId,
+      },
     });
 
     return {
@@ -453,7 +471,12 @@ function buildRoadmapElements(roadmap, topicLabel) {
   mainEntries.forEach((entry, idx) => {
     const source = idx === 0 ? topicId : mainEntries[idx - 1].sectionId;
     elements.push({
-      data: { id: `${source}-to-${entry.sectionId}`, source, target: entry.sectionId },
+      data: {
+        id: `${source}-to-${entry.sectionId}`,
+        source,
+        target: entry.sectionId,
+        category: "MAIN",
+      },
     });
   });
 
@@ -469,14 +492,30 @@ function buildRoadmapElements(roadmap, topicLabel) {
       toLabel(section?.title, `Branch ${branchIndex + 1}`),
     );
     const sectionId = getSectionDomId(section);
-    const sectionLabel = toShortLabel(`${branchTitle} – Advanced branch`, 60);
+    const { fullTitle, shortLabel } = deriveSectionLabel(
+      { ...section, title: branchTitle },
+      branchIndex,
+      "BRANCH",
+    );
 
     elements.push({
-      data: { id: sectionId, label: sectionLabel, level: 1, category: "BRANCH", sectionId },
+      data: {
+        id: sectionId,
+        label: shortLabel,
+        fullTitle,
+        level: 1,
+        category: "BRANCH",
+        sectionId,
+      },
     });
 
     elements.push({
-      data: { id: `${branchParentId}-to-${sectionId}`, source: branchParentId, target: sectionId },
+      data: {
+        id: `${branchParentId}-to-${sectionId}`,
+        source: branchParentId,
+        target: sectionId,
+        category: "BRANCH",
+      },
     });
   });
 
@@ -508,6 +547,20 @@ async function loadCytoscape() {
   return cytoscapeLoader;
 }
 
+function clampZoomValue(value, minZoom, maxZoom) {
+  const min = Number.isFinite(minZoom) ? minZoom : 0.7;
+  const max = Number.isFinite(maxZoom) ? maxZoom : 2.0;
+  return Math.min(Math.max(value, min), max);
+}
+
+function fitRoadmapToView(cy, padding = 40, zoomBoost = 1.12) {
+  if (!cy) return;
+  cy.fit(undefined, padding);
+  const targetZoom = clampZoomValue(cy.zoom() * zoomBoost, cy.minZoom(), cy.maxZoom());
+  cy.zoom(targetZoom);
+  cy.center();
+}
+
 async function renderRoadmapGraph(roadmap, topic) {
   if (!roadmapGraphContainer) return;
 
@@ -529,83 +582,141 @@ async function renderRoadmapGraph(roadmap, topic) {
     roadmapCy.destroy();
   }
 
+  const layoutOptions = {
+    name: "breadthfirst",
+    directed: true,
+    roots: "#" + topicId,
+    orientation: "vertical",
+    spacingFactor: 1.4,
+    padding: 40,
+    avoidOverlap: true,
+    nodeDimensionsIncludeLabels: true,
+    animate: false,
+  };
+
   roadmapCy = cytoscape({
     container: roadmapGraphContainer,
     elements,
-    layout: {
-      name: "breadthfirst",
-      directed: true,
-      circle: false,
-      roots: "#" + topicId,
-      padding: 40,
-      spacingFactor: 1.5,
-      animate: false,
-    },
+    layout: layoutOptions,
+    wheelSensitivity: 0.2,
+    minZoom: 0.7,
+    maxZoom: 2.0,
     style: [
       {
-        selector: "node[level = 0]",
+        selector: "node",
         style: {
           label: "data(label)",
           shape: "round-rectangle",
-          width: 160,
-          height: 50,
-          "background-color": "#22d3ee",
-          "border-color": "#38bdf8",
-          "border-width": 3,
-          "font-size": 12,
-          "text-wrap": "wrap",
-          "text-max-width": "140px",
-          "text-valign": "center",
-          "text-halign": "center",
-          "text-outline-width": 1,
-          "text-outline-color": "#e0f2fe",
-        },
-      },
-      {
-        selector: "node[level = 1]",
-        style: {
-          label: "data(label)",
-          shape: "round-rectangle",
-          width: 180,
-          height: 52,
+          width: "200px",
+          height: "56px",
           "background-color": "#0ea5e9",
-          "border-color": "#38bdf8",
-          "border-width": 2,
-          "font-size": 11,
+          "background-fill": "linear-gradient",
+          "background-gradient-stop-colors": ["#38bdf8", "#1e3a8a"],
+          "background-gradient-direction": "to-bottom-right",
+          "border-color": "rgba(103, 232, 249, 0.75)",
+          "border-width": 2.6,
+          "border-opacity": 1,
+          "font-size": 13.5,
+          "font-weight": 600,
           "text-wrap": "wrap",
           "text-max-width": "160px",
           "text-valign": "center",
           "text-halign": "center",
+          "color": "#e0f2fe",
           "text-outline-width": 1,
-          "text-outline-color": "#e0f2fe",
+          "text-outline-color": "rgba(15,23,42,0.8)",
+          "shadow-blur": 18,
+          "shadow-color": "#1d4ed8",
+          "shadow-opacity": 0.4,
+          "shadow-offset-x": 0,
+          "shadow-offset-y": 8,
+          cursor: "pointer",
+          "text-events": "yes",
+        },
+      },
+      {
+        selector: "node[level = 0]",
+        style: {
+          width: "220px",
+          height: "64px",
+          "background-gradient-stop-colors": ["#38bdf8", "#2563eb"],
+          "border-color": "#67e8f9",
+          "shadow-color": "#06b6d4",
+          "font-size": 14,
+          "font-weight": 700,
         },
       },
       {
         selector: 'node[category = "BRANCH"]',
         style: {
           "background-color": "#22c55e",
-          "border-color": "#4ade80",
+          "background-gradient-stop-colors": ["#34d399", "#15803d"],
+          "border-color": "rgba(74, 222, 128, 0.95)",
+          "shadow-color": "#16a34a",
+        },
+      },
+      {
+        selector: "node:hover",
+        style: {
+          "shadow-blur": 28,
+          "shadow-opacity": 0.6,
+          "border-width": 3,
+          "transition-property": "shadow-blur, border-width",
+          "transition-duration": "150ms",
         },
       },
       {
         selector: "edge",
         style: {
-          width: 2,
-          "line-color": "#94a3b8",
-          "target-arrow-color": "#94a3b8",
+          width: 2.8,
+          "line-color": "rgba(148,163,184,0.65)",
+          "target-arrow-color": "rgba(148,163,184,0.65)",
           "target-arrow-shape": "triangle",
           "curve-style": "bezier",
+          "arrow-scale": 1.1,
         },
       },
       {
-        selector: ":selected",
+        selector: 'edge[category = "MAIN"]',
         style: {
-          "border-width": 3,
-          "border-color": "#facc15",
+          width: 3.4,
+          "line-color": "#7dd3fc",
+          "target-arrow-color": "#7dd3fc",
+        },
+      },
+      {
+        selector: 'edge[category = "BRANCH"]',
+        style: {
+          width: 3,
+          "line-color": "rgba(34,197,94,0.8)",
+          "target-arrow-color": "#34d399",
+        },
+      },
+      {
+        selector: "node.is-selected",
+        style: {
+          "border-width": 4,
+          "border-color": "#fcd34d",
+          "shadow-opacity": 0.8,
+          "shadow-blur": 28,
+          "shadow-color": "#fcd34d",
+        },
+      },
+      {
+        selector: "edge.is-linked",
+        style: {
+          width: 4,
+          "line-color": "#facc15",
+          "target-arrow-color": "#facc15",
         },
       },
     ],
   });
+
+  const layout = roadmapCy.layout(layoutOptions);
+  layout.run();
+  layout.on("layoutstop", () => fitRoadmapToView(roadmapCy, 48, 1.15));
+  fitRoadmapToView(roadmapCy, 48, 1.15);
 
   roadmapCy.on("tap", "node", (event) => {
     const node = event.target;
@@ -623,16 +734,36 @@ async function renderRoadmapGraph(roadmap, topic) {
       sectionId,
     });
 
-    roadmapCy.elements().removeClass("is-selected");
+    roadmapCy.nodes().removeClass("is-selected");
+    roadmapCy.edges().removeClass("is-linked");
     roadmapCy.elements().unselect();
     node.addClass("is-selected");
+    node.connectedEdges().addClass("is-linked");
     node.select();
+    roadmapCy.animate({
+      center: { eles: node },
+      zoom: clampZoomValue(roadmapCy.zoom() * 1.02, roadmapCy.minZoom(), roadmapCy.maxZoom()),
+      duration: 220,
+      easing: "ease-out",
+    });
 
     if (sectionId && currentRoadmap) {
       renderRoadmap(null, sectionId);
     }
   });
 }
+
+window.addEventListener("resize", () => {
+  if (roadmapResizeTimeout) {
+    clearTimeout(roadmapResizeTimeout);
+  }
+
+  roadmapResizeTimeout = window.setTimeout(() => {
+    if (roadmapCy) {
+      fitRoadmapToView(roadmapCy, 48, 1.08);
+    }
+  }, 180);
+});
 
 showView("home");
 
