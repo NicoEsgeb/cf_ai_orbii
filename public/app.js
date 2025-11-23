@@ -92,6 +92,18 @@ function renderRoadmap(roadmap) {
   if (!roadmapContent) return;
   roadmapContent.innerHTML = "";
 
+  const correctionNote =
+    roadmap && typeof roadmap.correctionNote === "string"
+      ? roadmap.correctionNote.trim()
+      : "";
+
+  if (correctionNote) {
+    const noteEl = document.createElement("p");
+    noteEl.className = "roadmap-note";
+    noteEl.textContent = correctionNote;
+    roadmapContent.appendChild(noteEl);
+  }
+
   const overview =
     roadmap && typeof roadmap.overview === "string"
       ? roadmap.overview.trim()
@@ -291,36 +303,56 @@ function buildRoadmapElements(roadmap, topicLabel) {
     },
   ];
 
+  const sectionIds = [];
+
   sections.forEach((section, sectionIndex) => {
-    const rawSectionLabel = toLabel(section?.title, `Section ${sectionIndex + 1}`);
-    const sectionLabel = toShortLabel(rawSectionLabel, 40);
+    const sectionNumber = sectionIndex + 1;
+    const rawSectionLabel = toLabel(section?.title, `Section ${sectionNumber}`);
+    const sectionLabel = toShortLabel(`${sectionNumber}. ${rawSectionLabel}`, 40);
     const sectionId = `section-${sectionIndex}-${toIdPart(rawSectionLabel) || sectionIndex}`;
+
+    sectionIds.push(sectionId);
 
     elements.push({
       data: { id: sectionId, label: sectionLabel, level: 1 },
     });
-    elements.push({
-      data: { id: `${topicId}-to-${sectionId}`, source: topicId, target: sectionId },
-    });
+  });
 
+  sectionIds.forEach((sectionId, idx) => {
+    const source = idx === 0 ? topicId : sectionIds[idx - 1];
+    elements.push({
+      data: { id: `${source}-to-${sectionId}`, source, target: sectionId },
+    });
+  });
+
+  sections.forEach((section, sectionIndex) => {
+    const sectionNumber = sectionIndex + 1;
+    const sectionId = sectionIds[sectionIndex];
     const steps = Array.isArray(section?.steps) ? section.steps : [];
+
+    let previousNodeId = sectionId;
+
     steps.forEach((step, stepIndex) => {
+      const stepNumber = stepIndex + 1;
       const rawStep = typeof step === "string" ? step : "";
       const parsed = parseRoadmapStep(rawStep);
       const baseLabel = parsed.text || parsed.label || `Step ${stepIndex + 1}`;
-      const stepLabel = toShortLabel(baseLabel, 42);
+      const numberedLabel = `${sectionNumber}.${stepNumber} ${baseLabel}`;
+      const stepLabel = toShortLabel(numberedLabel, 42);
       const stepId = `${sectionId}-step-${stepIndex}`;
 
       elements.push({
         data: { id: stepId, label: stepLabel, level: 2 },
       });
       elements.push({
-        data: { id: `${sectionId}-to-${stepId}`, source: sectionId, target: stepId },
+        data: { id: `${previousNodeId}-to-${stepId}`, source: previousNodeId, target: stepId },
       });
+
+      previousNodeId = stepId;
     });
   });
 
-  return elements;
+  return { elements, topicId };
 }
 
 async function loadCytoscape() {
@@ -363,7 +395,7 @@ async function renderRoadmapGraph(roadmap, topic) {
   }
 
   const topicLabel = toLabel(topic || roadmap?.topic, "Git basics");
-  const elements = buildRoadmapElements(roadmap, topicLabel);
+  const { elements, topicId } = buildRoadmapElements(roadmap, topicLabel);
 
   if (roadmapCy) {
     roadmapCy.destroy();
@@ -373,16 +405,14 @@ async function renderRoadmapGraph(roadmap, topic) {
     container: roadmapGraphContainer,
     elements,
     layout: {
-      name: "concentric",
-      padding: 32,
-      minNodeSpacing: 32,
-      startAngle: (3 / 2) * Math.PI,
-      sweep: 2 * Math.PI,
-      concentric: (node) => {
-        const level = typeof node.data("level") === "number" ? node.data("level") : 2;
-        return 3 - level;
-      },
-      levelWidth: () => 1,
+      name: "breadthfirst",
+      directed: true,
+      padding: 40,
+      spacingFactor: 1.1,
+      fit: true,
+      circle: false,
+      avoidOverlap: true,
+      roots: "#" + topicId,
     },
     style: [
       {
@@ -427,7 +457,6 @@ async function renderRoadmapGraph(roadmap, topic) {
   roadmapCy.on("tap", "node", (event) => {
     const data = event.target.data();
     console.log("Roadmap node selected:", data);
-    alert(data?.label ? `Selected: ${data.label}` : `Selected node ${data.id}`);
   });
 }
 
@@ -761,11 +790,6 @@ createRoadmapButton?.addEventListener("click", async () => {
   }
 
   setTopicError("");
-  if (roadmapTopic) {
-    roadmapTopic.textContent = topic;
-  } else if (roadmapTopicTitle) {
-    roadmapTopicTitle.textContent = `Roadmap for: ${topic}`;
-  }
 
   showView("roadmap");
   renderRoadmapStatus("Loading roadmap...");
@@ -785,8 +809,21 @@ createRoadmapButton?.addEventListener("click", async () => {
     }
 
     const roadmap = await response.json();
+    const displayTopic =
+      roadmap &&
+      typeof roadmap.canonicalTopic === "string" &&
+      roadmap.canonicalTopic.trim()
+        ? roadmap.canonicalTopic.trim()
+        : topic;
+
+    if (roadmapTopic) {
+      roadmapTopic.textContent = displayTopic;
+    } else if (roadmapTopicTitle) {
+      roadmapTopicTitle.textContent = `Roadmap for: ${displayTopic}`;
+    }
+
     renderRoadmap(roadmap);
-    await renderRoadmapGraph(roadmap, topic);
+    await renderRoadmapGraph(roadmap, displayTopic);
   } catch (error) {
     console.error("Failed to fetch roadmap", error);
     renderRoadmapStatus(

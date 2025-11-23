@@ -351,7 +351,7 @@ body {
 
 .roadmap-graph {
   width: 100%;
-  min-height: 320px;
+  min-height: 440px;
   border-radius: 1rem;
   border: 1px solid rgba(125, 211, 252, 0.35);
   background: radial-gradient(circle at 20% 20%, rgba(34, 211, 238, 0.14), transparent 35%),
@@ -374,6 +374,13 @@ body {
   width: 100%;
   text-align: center;
   color: #cbd5f5;
+}
+
+.roadmap-note {
+  font-size: 0.85rem;
+  color: #a5b4fc;
+  margin-bottom: 0.6rem;
+  opacity: 0.9;
 }
 
 .roadmap-section {

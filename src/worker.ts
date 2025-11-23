@@ -18,6 +18,34 @@ export interface Env {
 const MAX_STUDY_TEXT_LENGTH = 20000;
 const CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
+type NormalizedTopic = {
+  raw: string;
+  key: string;
+  display: string;
+  wasCorrected: boolean;
+};
+
+function normalizeTopic(rawTopic: string): NormalizedTopic {
+  const raw = (rawTopic || "").trim();
+
+  const lower = raw.toLowerCase();
+  const collapsedSpaces = lower.replace(/\s+/g, " ").trim();
+  const collapsedRepeats = collapsedSpaces.replace(/([a-z])\1{2,}/g, "$1");
+
+  const key = collapsedRepeats;
+  const display = collapsedRepeats
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+  const wasCorrected =
+    raw.length > 0 &&
+    (raw.toLowerCase().trim() !== collapsedRepeats || raw.trim() !== display);
+
+  return { raw, key, display: display || raw || "Topic", wasCorrected };
+}
+
 type RoadmapNode = {
   id: string;
   title: string;
@@ -43,6 +71,11 @@ type RoadmapResponse = {
   nodes?: RoadmapNode[];
   edges?: RoadmapEdge[];
   sections?: RoadmapSection[];
+  canonicalTopic?: string;
+  originalTopic?: string;
+  normalizedKey?: string;
+  corrected?: boolean;
+  correctionNote?: string | null;
 };
 
 export default {
@@ -196,30 +229,33 @@ function getChatSessionStub(env: Env, sessionId: string) {
 
 function buildRoadmapPrompt(topic: string): string {
   return [
-    "You are Orbii, a friendly but expert curriculum designer building a self-paced mini-course for an absolute beginner.",
-    "Design a modern learning roadmap the learner can actually follow step by step.",
-    "Structure it as a path that goes through four phases: [FOUNDATIONS], [CORE SKILLS], [APPLICATIONS], [REFLECTION & NEXT STEPS].",
-    "Each phase is one or more sections. Put the phase name in square brackets at the start of the section title.",
+    "You are Orbii, a friendly but expert curriculum designer creating a self-paced course for an absolute beginner.",
+    "Design a modern learning roadmap that the learner can follow in order.",
+    "Use a fixed course skeleton so that the structure is always the same for any topic.",
     "",
-    "Use exactly this plain text format, one line per item:",
-    "OVERVIEW: <1–2 sentence overview of what the learner will be able to do after finishing the roadmap>",
-    "SECTION: <short section title with phase tag> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "Output format:",
+    "OVERVIEW: <1-2 sentence overview of what the learner will be able to do after finishing the roadmap>",
+    "SECTION: <[FOUNDATIONS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "SECTION: <[FOUNDATIONS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "SECTION: <[CORE SKILLS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "SECTION: <[CORE SKILLS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "SECTION: <[PROJECT] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
+    "SECTION: <[NEXT STEPS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
     "",
-    "Step format:",
-    "- Each step must be a concrete 25–60 minute task starting with a verb.",
-    "- For at least two steps in every section, append one high-quality resource in this exact pattern at the end of the step: [LINK: <short label> - https://...].",
-    "- Prefer well-known beginner-friendly sources such as Khan Academy, 3Blue1Brown, MIT OCW, Brilliant, official docs, or other reputable sites.",
+    "Hard rules:",
+    "- You MUST output exactly one OVERVIEW line and exactly six SECTION lines, in that order.",
+    "- The six SECTION lines MUST be, in this order: [FOUNDATIONS] ..., [FOUNDATIONS] ..., [CORE SKILLS] ..., [CORE SKILLS] ..., [PROJECT] ..., [NEXT STEPS] ....",
+    "- Each SECTION line MUST have exactly four steps, separated by ';'.",
+    "- Do NOT output any extra text, headings, numbering, or commentary.",
+    "- Each summary is exactly one short sentence.",
+    "- Each section has exactly four steps.",
+    "- Each step starts with a verb and describes a 25-60 minute learning activity.",
+    "- You MAY optionally add one resource link at the end of a step, using this format: [LINK: Label for learner - https://full-url-here.com/path].",
+    "- If you add a link, it must be inside square brackets exactly in that format.",
+    "- Do not put the characters '|' or ';' inside titles, summaries, or step text. Use '|' only to separate title and summary, and ';' only to separate steps.",
     "",
-    "Rules:",
-    "- Respond using ONLY plain text lines starting with OVERVIEW: or SECTION: (no bullet points, no numbering, no extra commentary).",
-    "- Write 5 to 8 SECTION lines total, ordered from easiest concepts first to more advanced and project-style work last.",
-    "- Each summary is one short sentence.",
-    "- Each section has 3 to 5 steps.",
-    "- Do not put the '|' or ';' characters inside titles, summaries, or step text. Use ';' only between steps.",
-    "- Inside URLs, do not include '|' or ';'.",
-    "- Include at least one small project-style section in the [APPLICATIONS] phase and one reflection / revision section in the [REFLECTION & NEXT STEPS] phase.",
     `Topic: ${topic}`,
-    "Now write the OVERVIEW: line and the SECTION: lines.",
+    "Now write the OVERVIEW line and the six SECTION lines.",
   ].join("\\n");
 }
 
@@ -305,10 +341,10 @@ function parseRoadmapFromText(raw: string, topic: string): RoadmapResponse {
 }
 
 async function handleRoadmapRequest(request: Request, env: Env): Promise<Response> {
-  let topic: string;
+  let rawTopic: string;
   try {
     const body = (await request.clone().json()) as { topic?: unknown };
-    topic = typeof body.topic === "string" ? body.topic.trim() : "";
+    rawTopic = typeof body.topic === "string" ? body.topic : "";
   } catch {
     return new Response(JSON.stringify({ error: "Missing topic" }), {
       status: 400,
@@ -316,20 +352,25 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
     });
   }
 
-  if (!topic) {
+  const normalized = normalizeTopic(rawTopic || "Untitled topic");
+  if (!normalized.key.trim()) {
     return new Response(JSON.stringify({ error: "Missing topic" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  console.log("Generating roadmap for topic:", topic);
+  const topicForPrompt = normalized.display;
+
+  console.log("Generating roadmap for topic:", normalized.key);
 
   let raw: string | undefined;
   try {
-    const prompt = buildRoadmapPrompt(topic);
+    const prompt = buildRoadmapPrompt(topicForPrompt);
     const aiResult = (await (env.AI as any).run(CHAT_MODEL, {
-      messages: [{ role: "user", content: prompt }],
+      prompt,
+      temperature: 0,
+      max_tokens: 900,
     })) as { response?: string };
 
     const rawCandidate =
@@ -338,9 +379,20 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
         : (aiResult?.response ?? JSON.stringify(aiResult));
     raw = (rawCandidate ?? "").toString();
 
-    const roadmap = parseRoadmapFromText(raw, topic);
+    const roadmap = parseRoadmapFromText(raw, normalized.display);
+    const responsePayload: RoadmapResponse = {
+      ...roadmap,
+      topic: normalized.display,
+      canonicalTopic: normalized.display,
+      originalTopic: normalized.raw,
+      normalizedKey: normalized.key,
+      corrected: normalized.wasCorrected,
+      correctionNote: normalized.wasCorrected
+        ? `Showing roadmap for "${normalized.display}" (you typed "${normalized.raw}").`
+        : null,
+    };
 
-    return new Response(JSON.stringify(roadmap), {
+    return new Response(JSON.stringify(responsePayload), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
