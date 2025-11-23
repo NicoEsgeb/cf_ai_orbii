@@ -35,10 +35,17 @@ type RoadmapCategory =
   | "BRANCH"
   | "OTHER";
 
+type RoadmapStep = {
+  id: string;
+  title: string;
+  summary: string;
+  resources: string[];
+};
+
 type RoadmapSection = {
   title: string;
   summary: string;
-  steps: string[];
+  steps: RoadmapStep[];
   category?: RoadmapCategory;
   branchLabel?: string;
   branchKey?: string;
@@ -304,10 +311,16 @@ function parseCanonicalTopicResponse(
 function buildRoadmapPrompt(canonicalTopic: string): string {
   return `Return a single JSON object matching this TypeScript shape:
 type RoadmapCategory = "FOUNDATIONS" | "CORE_SKILLS" | "PROJECT" | "NEXT_STEPS" | "BRANCH" | "OTHER";
+type RoadmapStep = {
+  id: string;
+  title: string;
+  summary: string;
+  resources: string[]; // plain text suggestions only, never URLs or HTML
+};
 interface RoadmapSection {
   title: string;
   summary: string;
-  steps: string[];
+  steps: RoadmapStep[];
   category?: RoadmapCategory;
   branchLabel?: string;
   branchKey?: string;
@@ -323,16 +336,93 @@ interface RoadmapResponse {
 Generate a stable beginner roadmap for canonicalTopic = "${canonicalTopic}".
 
 Rules:
-- You are Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners.
+- You are Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners. Never invent or include URLs, video/channel handles, HTML tags, or markdown in any field.
 - Output valid JSON only, no markdown or comments.
 - Return ONLY a single JSON object, with no backticks, no markdown fences, and no extra explanation text before or after the JSON.
 - For the same canonicalTopic, always reuse the same overall section structure, titles, categories, and branching layout as a reusable course template. Only minor wording tweaks in summaries/steps are allowed between runs.
 - Main path order with index numbers starting at 1: 2-3 sections with category "FOUNDATIONS", then 2-3 with "CORE_SKILLS", then exactly one "PROJECT", then exactly one "NEXT_STEPS".
 - Branches: If the topic has natural specialisations, add 2-4 sections with category "BRANCH" (after core skills). Each BRANCH includes branchLabel (short name), branchKey (kebab-case slug), its own title/summary, and 3-5 steps focused on that sub-field.
-- Every section has 3-6 steps. Each step starts with a verb and is a 20-60 minute task (watch, read, practice, build, quiz). Include 1-2 high-quality external resources across the whole roadmap using the exact pattern: [LINK: Label - https://example.com/path]. Do not use square brackets for anything else.
+- Every section has 3-6 steps. Each step starts with a verb and is a 20-60 minute task (watch, read, practice, build, quiz).
+- RoadmapStep.resources must be an array of 1-3 short, plain text suggestions only. No http/https strings, no URLs, no HTML tags, and no markdown. Use phrasing like "Watch a beginner-friendly video about plate tectonics (search on YouTube)" or "Read an introductory article on the Earth's layers (search 'earth layers beginner explanation')".
+- Do not include real or fabricated links, domains, or channel names. No <a>, <br>, or any other HTML anywhere in the JSON.
 - Summaries are one friendly sentence for absolute beginners.
 - Use the canonicalTopic exactly as given. Variants like misspellings or casing still map to this same structure.
 `;
+}
+
+function toSlugId(value: string, fallback: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || fallback;
+}
+
+function normalizeResources(rawResources: unknown): string[] {
+  const list = Array.isArray(rawResources)
+    ? rawResources
+    : typeof rawResources === "string"
+      ? [rawResources]
+      : [];
+
+  const seen = new Set<string>();
+  return list
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => {
+      if (!entry) return false;
+      if (/https?:\/\//i.test(entry)) return false;
+      if (/<\/?[a-z][^>]*>/i.test(entry)) return false;
+      if (seen.has(entry)) return false;
+      seen.add(entry);
+      return true;
+    });
+}
+
+function normalizeRoadmapStep(step: unknown, fallbackIndex: number): RoadmapStep | null {
+  const fallbackTitle = `Step ${fallbackIndex + 1}`;
+  const fallbackId = `step-${fallbackIndex + 1}`;
+
+  if (!step) return null;
+
+  if (typeof step === "string") {
+    const title = step.trim();
+    if (!title) return null;
+    return {
+      id: toSlugId(title, fallbackId),
+      title,
+      summary: "",
+      resources: [],
+    };
+  }
+
+  if (typeof step !== "object") return null;
+
+  const stepObj = step as Record<string, unknown>;
+  const rawTitle =
+    typeof stepObj.title === "string" && stepObj.title.trim()
+      ? stepObj.title.trim()
+      : typeof stepObj.name === "string" && stepObj.name.trim()
+        ? stepObj.name.trim()
+        : "";
+  const summary =
+    typeof stepObj.summary === "string" && stepObj.summary.trim() ? stepObj.summary.trim() : "";
+  const title = rawTitle || summary || fallbackTitle;
+
+  if (!title) return null;
+
+  const rawId =
+    typeof stepObj.id === "string" && stepObj.id.trim() ? stepObj.id.trim() : undefined;
+  const id = rawId ?? toSlugId(title, fallbackId);
+
+  const resources = normalizeResources(stepObj.resources);
+
+  return {
+    id,
+    title,
+    summary,
+    resources,
+  };
 }
 
 function normalizeCategory(value: unknown): RoadmapCategory | undefined {
@@ -380,8 +470,8 @@ function parseRoadmapResponseText(
             : "";
         const steps = Array.isArray(section.steps)
           ? section.steps
-              .map((step: unknown) => (typeof step === "string" ? step.trim() : ""))
-              .filter((step: string) => step.length > 0)
+              .map((step: unknown, stepIdx: number) => normalizeRoadmapStep(step, stepIdx))
+              .filter((step: RoadmapStep | null): step is RoadmapStep => Boolean(step))
           : [];
 
         if (!title && !summary && steps.length === 0) {
@@ -413,7 +503,7 @@ function parseRoadmapResponseText(
           index,
         };
       })
-      .filter(Boolean) as RoadmapSection[];
+      .filter((section: RoadmapSection | null): section is RoadmapSection => Boolean(section));
 
     if (!sections.length) {
       return null;
@@ -461,9 +551,31 @@ function buildFallbackRoadmap(
         title: `Getting started with ${canonicalTopic || "the topic"}`,
         summary: `Kick off your learning about ${canonicalTopic || "this topic"}.`,
         steps: [
-          `Watch or read a beginner-friendly introduction to ${canonicalTopic || "the topic"}.`,
-          `Write down 3-5 key ideas you learned about ${canonicalTopic || "the topic"}.`,
-          `Try one small practice task to apply a concept from ${canonicalTopic || "the topic"}.`,
+          {
+            id: "step-1",
+            title: `Watch or read a beginner-friendly introduction to ${canonicalTopic || "the topic"}.`,
+            summary: `Get a quick overview before diving deeper.`,
+            resources: [
+              `Watch a short explainer video on ${canonicalTopic || "the topic"} (search on YouTube).`,
+              `Read an introductory article that answers "What is ${canonicalTopic || "the topic"}?" (search a trusted edu site).`,
+            ],
+          },
+          {
+            id: "step-2",
+            title: `Write down 3-5 key ideas you learned about ${canonicalTopic || "the topic"}.`,
+            summary: `Capture the essentials in your own words.`,
+            resources: [
+              `Search for a beginner summary of ${canonicalTopic || "the topic"} and note the main points.`,
+            ],
+          },
+          {
+            id: "step-3",
+            title: `Try one small practice task to apply a concept from ${canonicalTopic || "the topic"}.`,
+            summary: `Reinforce the basics with a quick exercise.`,
+            resources: [
+              `Look for a simple practice prompt for ${canonicalTopic || "the topic"} (search "beginner exercise").`,
+            ],
+          },
         ],
         category: "FOUNDATIONS",
         index: 1,
@@ -530,7 +642,8 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
       messages: [
         {
           role: "system",
-          content: "Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners.",
+          content:
+            "You are Orbii, an expert curriculum designer that outputs strict JSON roadmaps for beginners. Never invent URLs or HTML; roadmap steps only reference plain-text resource suggestions.",
         },
         { role: "user", content: prompt },
       ],

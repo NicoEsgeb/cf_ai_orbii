@@ -124,18 +124,59 @@
           </div>
           <div id="roadmap-root" class="roadmap-main-grid roadmap-main-panel">
             <div class="roadmap-main-panel-left">
-              <div id="roadmap-graph" class="roadmap-graph"></div>
+              <div id="roadmap-graph" class="roadmap-graph-shell">
+                <canvas id="roadmap-graph-canvas"></canvas>
+              </div>
             </div>
 
-            <aside class="roadmap-main-panel-right roadmap-detail-shell">
-              <div class="roadmap-detail-header">
-                <p class="roadmap-detail-kicker">Step details</p>
-                <p class="roadmap-detail-hint">Choose a node to see the focused plan.</p>
+            <aside class="roadmap-main-panel-middle roadmap-detail-shell">
+              <div class="roadmap-details-column">
+                <div class="roadmap-detail-header roadmap-details-header">
+                  <p class="roadmap-detail-kicker">Step details</p>
+                  <p class="roadmap-detail-hint">Choose a node to see the focused plan.</p>
+                </div>
+                <div class="roadmap-details-scroll">
+                  <div id="roadmap-content" class="roadmap-content">
+                    <p class="roadmap-status">
+                      Select a step on the left to see what to do there.
+                    </p>
+                  </div>
+                </div>
               </div>
-              <div id="roadmap-content" class="roadmap-content">
-                <p class="roadmap-status">
-                  Select a step on the left to see what to do there.
-                </p>
+            </aside>
+
+            <aside class="roadmap-main-panel-right orbii-roadmap-chat-shell">
+              <div class="orbii-roadmap-header">
+                <div class="orbii-roadmap-orb">
+                  <div class="orbii-roadmap-orb-core"></div>
+                </div>
+                <div class="orbii-roadmap-title-group">
+                  <div class="orbii-roadmap-title">Chat with Orbii</div>
+                  <div class="orbii-roadmap-subtitle">
+                    Ask Orbii about the selected step in this roadmap.
+                  </div>
+                </div>
+              </div>
+
+              <div class="orbii-roadmap-chat-card">
+                <div id="roadmap-chat-step-label" class="orbii-roadmap-step-label">
+                  Select a step to start chatting.
+                </div>
+
+                <div id="roadmap-chat-messages" class="orbii-chat-messages"></div>
+
+                <form id="roadmap-chat-form" class="orbii-chat-input-row">
+                  <input
+                    id="roadmap-chat-input"
+                    type="text"
+                    autocomplete="off"
+                    placeholder="Ask Orbii something about this step…"
+                    class="orbii-chat-input"
+                  />
+                  <button type="submit" class="orbii-chat-send-button">
+                    Send
+                  </button>
+                </form>
               </div>
             </aside>
           </div>

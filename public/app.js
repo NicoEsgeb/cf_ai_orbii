@@ -59,38 +59,71 @@ function renderRoadmapStatus(message) {
   roadmapContent.appendChild(status);
 }
 
-function parseRoadmapStep(stepText) {
-  if (typeof stepText !== "string") {
-    return { text: "", url: null, label: null };
+function sanitizeRoadmapResource(resource) {
+  if (typeof resource !== "string") return "";
+  const trimmed = resource.trim();
+  if (!trimmed) return "";
+  if (/https?:\/\//i.test(trimmed)) return "";
+  if (/<\/?[a-z][^>]*>/i.test(trimmed)) return "";
+  return trimmed;
+}
+
+function normalizeRoadmapStep(step, stepIndex) {
+  const fallbackId = `step-${stepIndex + 1}`;
+  const fallbackTitle = `Step ${stepIndex + 1}`;
+
+  if (!step) return null;
+
+  if (typeof step === "string") {
+    const text = step.trim();
+    if (!text) return null;
+    return { id: fallbackId, title: text, summary: "", resources: [] };
   }
 
-  const raw = stepText.trim();
-  if (!raw) {
-    return { text: "", url: null, label: null };
-  }
+  if (typeof step !== "object") return null;
 
-  // Look for our [LINK: label - https://...] pattern
-  const linkMatch = raw.match(/\[LINK:\s*([^-\]]+)-\s*(https?:\/\/[^\]]+)\]/i);
-  if (!linkMatch) {
-    return { text: raw, url: null, label: null };
-  }
+  const title =
+    typeof step.title === "string" && step.title.trim()
+      ? step.title.trim()
+      : typeof step.name === "string" && step.name.trim()
+        ? step.name.trim()
+        : "";
+  const summary =
+    typeof step.summary === "string" && step.summary.trim() ? step.summary.trim() : "";
+  const resolvedTitle = title || summary || fallbackTitle;
 
-  const before = raw.slice(0, linkMatch.index).trim();
-  const label = linkMatch[1].trim();
-  const url = linkMatch[2].trim();
+  if (!resolvedTitle) return null;
 
-  // Strip a trailing colon/dash from the description if present
-  const cleanedText = before.replace(/[-–:]\s*$/, "").trim();
+  const id =
+    typeof step.id === "string" && step.id.trim()
+      ? step.id.trim()
+      : toIdPart(resolvedTitle)
+        ? `step-${toIdPart(resolvedTitle)}`
+        : fallbackId;
+
+  const resourcesRaw = Array.isArray(step.resources)
+    ? step.resources
+    : typeof step.resources === "string"
+      ? [step.resources]
+      : [];
+
+  const resources = resourcesRaw.map(sanitizeRoadmapResource).filter(Boolean);
 
   return {
-    text: cleanedText || label || raw,
-    url,
-    label: label || url,
+    id,
+    title: resolvedTitle,
+    summary,
+    resources,
   };
 }
 
 function renderRoadmap(roadmap, selectedSectionId) {
   if (!roadmapContent) return;
+
+  const previousStepId =
+    currentRoadmapStep && (currentRoadmapStep.domId || currentRoadmapStep.id)
+      ? currentRoadmapStep.domId || currentRoadmapStep.id
+      : null;
 
   if (!roadmap && currentRoadmap) {
     roadmap = currentRoadmap;
@@ -98,11 +131,31 @@ function renderRoadmap(roadmap, selectedSectionId) {
   if (!roadmap) {
     roadmapContent.innerHTML =
       "<p class='roadmap-status'>Enter a topic on the home screen first.</p>";
+    currentRoadmapSections = [];
+    currentRoadmapStep = null;
+    roadmapChatUserMessages = 0;
+    roadmapChatNudged = false;
+    updateRoadmapChatLabel();
     return;
   }
 
   currentRoadmap = roadmap;
+  const topicFromRoadmap =
+    typeof roadmap.canonicalTopic === "string" && roadmap.canonicalTopic.trim()
+      ? roadmap.canonicalTopic.trim()
+      : typeof roadmap.topic === "string" && roadmap.topic.trim()
+        ? roadmap.topic.trim()
+        : null;
+  const labelFromDom =
+    roadmapTopic && typeof roadmapTopic.textContent === "string"
+      ? roadmapTopic.textContent.trim()
+      : null;
+  currentRoadmapTopic = topicFromRoadmap || labelFromDom || currentRoadmapTopic || null;
   roadmapContent.innerHTML = "";
+  const detailsScroll = document.querySelector(".roadmap-details-scroll");
+  if (detailsScroll && !selectedSectionId) {
+    detailsScroll.scrollTop = 0;
+  }
 
   const correctionNote =
     roadmap && typeof roadmap.correctionNote === "string"
@@ -128,28 +181,50 @@ function renderRoadmap(roadmap, selectedSectionId) {
   }
 
   const sections = extractRoadmapSections(roadmap);
-  if (!sections.length) {
+  const sectionsWithDomIds = sections.map((section, index) => ({
+    ...section,
+    domId: makeSectionDomId(section, index),
+  }));
+
+  if (!sectionsWithDomIds.length) {
     const status = document.createElement("p");
     status.className = "roadmap-status";
     status.textContent = "No roadmap data available.";
     roadmapContent.appendChild(status);
     currentSelectedSectionId = null;
+    currentRoadmapSections = [];
+    currentRoadmapStep = null;
+    updateRoadmapChatLabel();
     return;
   }
 
-  const fallbackSectionId = makeSectionDomId(sections[0], 0);
+  const fallbackSectionId = sectionsWithDomIds[0].domId;
   const hasMatchingSelection = selectedSectionId
-    ? sections.some((section, index) => makeSectionDomId(section, index) === selectedSectionId)
+    ? sectionsWithDomIds.some((section) => section.domId === selectedSectionId)
     : false;
   const defaultSectionId = hasMatchingSelection ? selectedSectionId : fallbackSectionId;
   currentSelectedSectionId = defaultSectionId;
+  currentRoadmapSections = sectionsWithDomIds;
+  currentRoadmapStep =
+    sectionsWithDomIds.find((section) => section.domId === defaultSectionId) || null;
+  updateRoadmapChatLabel();
 
-  sections.forEach((section, index) => {
-    const sectionDomId = makeSectionDomId(section, index);
+  const newStepId =
+    currentRoadmapStep && (currentRoadmapStep.domId || currentRoadmapStep.id)
+      ? currentRoadmapStep.domId || currentRoadmapStep.id
+      : null;
+  if (newStepId && newStepId !== previousStepId) {
+    roadmapChatUserMessages = 0;
+    roadmapChatNudged = false;
+  }
+
+  sectionsWithDomIds.forEach((section) => {
+    const sectionDomId = section.domId;
 
     const card = document.createElement("div");
-    card.className = "roadmap-section";
+    card.className = "roadmap-section roadmap-step-card";
     card.dataset.sectionId = sectionDomId;
+    card.dataset.stepId = sectionDomId;
     card.id = sectionDomId;
 
     if (sectionDomId === defaultSectionId) {
@@ -176,31 +251,39 @@ function renderRoadmap(roadmap, selectedSectionId) {
       const list = document.createElement("ul");
       list.className = "roadmap-step-list";
       steps.forEach((step) => {
-        if (typeof step !== "string" || !step.trim()) return;
-
-        const { text, url, label } = parseRoadmapStep(step);
-        if (!text && !url) return;
+        if (!step || typeof step !== "object") return;
 
         const li = document.createElement("li");
         li.className = "roadmap-step-item";
 
-        // Main description text
-        if (text) {
-          li.appendChild(document.createTextNode(text));
+        const stepTitle = document.createElement("div");
+        stepTitle.className = "roadmap-step-title";
+        stepTitle.textContent = toLabel(step?.title, "Step");
+        li.appendChild(stepTitle);
+
+        if (typeof step?.summary === "string" && step.summary.trim()) {
+          const stepSummary = document.createElement("div");
+          stepSummary.className = "roadmap-step-summary";
+          stepSummary.textContent = step.summary.trim();
+          li.appendChild(stepSummary);
         }
 
-        // Optional clickable resource link
-        if (url) {
-          li.appendChild(document.createTextNode(" "));
+        const resources = Array.isArray(step?.resources) ? step.resources : [];
+        if (resources.length) {
+          const resourcesList = document.createElement("ul");
+          resourcesList.className = "roadmap-resources-list";
+          resources.forEach((resource) => {
+            const resourceText = sanitizeRoadmapResource(resource);
+            if (!resourceText) return;
+            const resourceItem = document.createElement("li");
+            resourceItem.className = "roadmap-resource-item";
+            resourceItem.textContent = resourceText;
+            resourcesList.appendChild(resourceItem);
+          });
 
-          const link = document.createElement("a");
-          link.href = url;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          link.textContent = label || "Open resource";
-          link.className = "roadmap-step-link";
-
-          li.appendChild(link);
+          if (resourcesList.childNodes.length) {
+            li.appendChild(resourcesList);
+          }
         }
 
         list.appendChild(li);
@@ -210,11 +293,75 @@ function renderRoadmap(roadmap, selectedSectionId) {
 
     roadmapContent.appendChild(card);
   });
+  return defaultSectionId;
+}
 
-  const activeCard = defaultSectionId ? document.getElementById(defaultSectionId) : null;
-  if (activeCard && selectedSectionId) {
-    activeCard.scrollIntoView({ behavior: "smooth", block: "start" });
+function scrollStepIntoView(stepId) {
+  if (!stepId) return;
+  const container = document.querySelector(".roadmap-details-scroll");
+  if (!container) return;
+
+  const card = container.querySelector(`[data-step-id="${stepId}"]`);
+  if (!card) return;
+
+  const containerRect = container.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const offset = cardRect.top - containerRect.top + container.scrollTop - 16;
+
+  container.scrollTo({
+    top: offset,
+    behavior: "smooth",
+  });
+}
+
+function updateRoadmapChatLabel() {
+  const stepLabelEl = document.getElementById("roadmap-chat-step-label");
+  if (!stepLabelEl) return;
+  if (currentRoadmapStep) {
+    const label = toLabel(currentRoadmapStep.title, "this step");
+    stepLabelEl.textContent = `Chatting about: ${label}`;
+  } else {
+    stepLabelEl.textContent = "Select a step to start chatting.";
   }
+}
+
+function appendRoadmapChatMessage(text, from) {
+  const messagesEl = document.getElementById("roadmap-chat-messages");
+  if (!messagesEl) return;
+  const div = document.createElement("div");
+  div.className = `orbii-chat-message ${from}`;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function getNextRoadmapSection() {
+  if (!currentRoadmapSections.length || !currentRoadmapStep) return null;
+  const currentId = currentRoadmapStep.domId || currentRoadmapStep.id;
+  if (!currentId) return null;
+
+  const currentIndex = currentRoadmapSections.findIndex(
+    (section) => section.domId === currentId || section.id === currentId,
+  );
+  if (currentIndex < 0) return null;
+
+  const remaining = currentRoadmapSections.slice(currentIndex + 1);
+  const nextNonBranch = remaining.find(
+    (section) => normalizeSectionCategory(section?.category) !== "BRANCH",
+  );
+  return nextNonBranch || remaining[0] || null;
+}
+
+function maybeNudgeToNextStep() {
+  if (roadmapChatNudged) return;
+  if (roadmapChatUserMessages < 4) return;
+  const nextSection = getNextRoadmapSection();
+  if (!nextSection) return;
+  appendRoadmapChatMessage(
+    "If this feels clear, you can click the next box in the roadmap to keep going!",
+    "orbii",
+  );
+  roadmapChatNudged = true;
 }
 
 const CYTOSCAPE_CDN =
@@ -224,6 +371,13 @@ let roadmapCy;
 let currentRoadmap = null;
 let currentSelectedSectionId = null;
 let roadmapResizeTimeout;
+let currentRoadmapStep = null;
+let currentRoadmapTopic = null;
+let currentRoadmapSections = [];
+let roadmapChatSetupComplete = false;
+let roadmapChatUserMessages = 0;
+let roadmapChatNudged = false;
+let roadmapChatSessionId = null;
 
 function toLabel(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -290,8 +444,8 @@ function normalizeSections(sections) {
         summary: typeof section?.summary === "string" ? section.summary : "",
         steps: Array.isArray(section?.steps)
           ? section.steps
-              .map((step) => (typeof step === "string" ? step.trim() : ""))
-              .filter((step) => step)
+              .map((step, stepIdx) => normalizeRoadmapStep(step, stepIdx))
+              .filter(Boolean)
           : [],
         category,
         branchKey: branchKey || null,
@@ -371,7 +525,10 @@ function extractRoadmapSections(roadmap) {
         ? node.summary.trim()
         : "";
 
-    const steps = stepsByFrom.get(node.id) || [];
+    const rawSteps = stepsByFrom.get(node.id) || [];
+    const steps = rawSteps
+      .map((stepText, stepIdx) => normalizeRoadmapStep(stepText, stepIdx))
+      .filter(Boolean);
 
     return {
       title,
@@ -421,24 +578,31 @@ function deriveSectionLabel(section, index, category) {
 
 function buildRoadmapElements(roadmap, topicLabel) {
   const sections = extractRoadmapSections(roadmap);
-  const topicId = `topic-${toIdPart(topicLabel) || "center"}`;
+  const VERTICAL_GAP = 150;
+  const BRANCH_OFFSET_X = 260;
+  const TOP_Y = 0;
+  const CENTER_X = 0;
 
-  const elements = [
-    {
-      data: {
-        id: topicId,
-        label: toShortLabel(topicLabel || "Topic", 26),
-        level: 0,
-      },
+  const positions = new Map();
+
+  const topicId = `topic-${toIdPart(topicLabel) || "center"}`;
+  const elements = [];
+
+  positions.set(topicId, { x: CENTER_X, y: TOP_Y });
+  elements.push({
+    data: {
+      id: topicId,
+      label: toShortLabel(topicLabel || "Topic", 26),
+      level: 0,
     },
-  ];
+    position: positions.get(topicId),
+  });
 
   if (!sections.length) {
     return { elements, topicId };
   }
 
   const mainSections = sections.filter((section) => section.category !== "BRANCH");
-  const branchSections = sections.filter((section) => section.category === "BRANCH");
   const mainPath = mainSections.length ? mainSections : sections;
 
   const getSectionDomId = (section) => {
@@ -450,6 +614,9 @@ function buildRoadmapElements(roadmap, topicLabel) {
     const category = normalizeSectionCategory(section?.category);
     const { fullTitle, shortLabel } = deriveSectionLabel(section, sectionIndex, category);
     const sectionId = getSectionDomId(section);
+    const y = TOP_Y + (sectionIndex + 1) * VERTICAL_GAP;
+
+    positions.set(sectionId, { x: CENTER_X, y });
 
     elements.push({
       data: {
@@ -460,11 +627,14 @@ function buildRoadmapElements(roadmap, topicLabel) {
         category,
         sectionId,
       },
+      position: positions.get(sectionId),
     });
 
     return {
+      section,
       sectionId,
       category,
+      index: sectionIndex,
     };
   });
 
@@ -480,23 +650,33 @@ function buildRoadmapElements(roadmap, topicLabel) {
     });
   });
 
+  const normalizedBranchSections = sections.filter(
+    (section) => normalizeSectionCategory(section?.category) === "BRANCH",
+  );
+
   const branchAnchor =
     [...mainEntries].reverse().find(
       (entry) => entry.category === "CORE_SKILLS" || entry.category === "FOUNDATIONS",
     ) ?? mainEntries[mainEntries.length - 1];
-  const branchParentId = branchAnchor ? branchAnchor.sectionId : topicId;
 
-  branchSections.forEach((section, branchIndex) => {
-    const branchTitle = toLabel(
-      section?.branchLabel,
-      toLabel(section?.title, `Branch ${branchIndex + 1}`),
-    );
+  const branchParentId = branchAnchor ? branchAnchor.sectionId : topicId;
+  const anchorIndex = branchAnchor ? branchAnchor.index : mainEntries.length - 1;
+  const branchLevelY = TOP_Y + (anchorIndex + 2) * VERTICAL_GAP;
+
+  normalizedBranchSections.forEach((section, branchIndex) => {
     const sectionId = getSectionDomId(section);
     const { fullTitle, shortLabel } = deriveSectionLabel(
-      { ...section, title: branchTitle },
+      { ...section, title: section.branchLabel || section.title },
       branchIndex,
       "BRANCH",
     );
+
+    const centerIndex = (normalizedBranchSections.length - 1) / 2;
+    const offsetIndex = branchIndex - centerIndex;
+    const x = CENTER_X + offsetIndex * BRANCH_OFFSET_X;
+    const y = branchLevelY;
+
+    positions.set(sectionId, { x, y });
 
     elements.push({
       data: {
@@ -507,6 +687,7 @@ function buildRoadmapElements(roadmap, topicLabel) {
         category: "BRANCH",
         sectionId,
       },
+      position: positions.get(sectionId),
     });
 
     elements.push({
@@ -553,7 +734,35 @@ function clampZoomValue(value, minZoom, maxZoom) {
   return Math.min(Math.max(value, min), max);
 }
 
-function fitRoadmapToView(cy, padding = 40, zoomBoost = 1.12) {
+function setSelectedSection(sectionId, options = {}) {
+  if (!sectionId || !currentRoadmap) return;
+  const { fromGraph = false } = options;
+
+  const activeSectionId = renderRoadmap(null, sectionId);
+  if (!activeSectionId) return;
+
+  if (roadmapCy && !fromGraph) {
+    const node = roadmapCy.$id(activeSectionId);
+    if (node && node.length) {
+      roadmapCy.nodes().removeClass("is-selected");
+      roadmapCy.edges().removeClass("is-linked");
+      roadmapCy.elements().unselect();
+      node.addClass("is-selected");
+      node.connectedEdges().addClass("is-linked");
+      node.select();
+      roadmapCy.animate({
+        center: { eles: node },
+        zoom: clampZoomValue(roadmapCy.zoom() * 1.02, roadmapCy.minZoom(), roadmapCy.maxZoom()),
+        duration: 220,
+        easing: "ease-out",
+      });
+    }
+  }
+
+  scrollStepIntoView(activeSectionId);
+}
+
+function fitRoadmapToView(cy, padding = 30, zoomBoost = 1.2) {
   if (!cy) return;
   cy.fit(undefined, padding);
   const targetZoom = clampZoomValue(cy.zoom() * zoomBoost, cy.minZoom(), cy.maxZoom());
@@ -583,15 +792,9 @@ async function renderRoadmapGraph(roadmap, topic) {
   }
 
   const layoutOptions = {
-    name: "breadthfirst",
-    directed: true,
-    roots: "#" + topicId,
-    orientation: "vertical",
-    spacingFactor: 1.4,
-    padding: 40,
-    avoidOverlap: true,
-    nodeDimensionsIncludeLabels: true,
-    animate: false,
+    name: "preset",
+    fit: false,
+    padding: 10,
   };
 
   roadmapCy = cytoscape({
@@ -616,7 +819,7 @@ async function renderRoadmapGraph(roadmap, topic) {
           "border-color": "rgba(103, 232, 249, 0.75)",
           "border-width": 2.6,
           "border-opacity": 1,
-          "font-size": 13.5,
+          "font-size": 14,
           "font-weight": 600,
           "text-wrap": "wrap",
           "text-max-width": "160px",
@@ -714,9 +917,9 @@ async function renderRoadmapGraph(roadmap, topic) {
   });
 
   const layout = roadmapCy.layout(layoutOptions);
+  layout.on("layoutstop", () => fitRoadmapToView(roadmapCy));
   layout.run();
-  layout.on("layoutstop", () => fitRoadmapToView(roadmapCy, 48, 1.15));
-  fitRoadmapToView(roadmapCy, 48, 1.15);
+  fitRoadmapToView(roadmapCy);
 
   roadmapCy.on("tap", "node", (event) => {
     const node = event.target;
@@ -748,9 +951,112 @@ async function renderRoadmapGraph(roadmap, topic) {
     });
 
     if (sectionId && currentRoadmap) {
-      renderRoadmap(null, sectionId);
+      setSelectedSection(sectionId, { fromGraph: true });
     }
   });
+}
+
+function setupRoadmapChat(options = {}) {
+  const { resetTranscript = false } = options;
+  const messagesEl = document.getElementById("roadmap-chat-messages");
+  const inputEl = document.getElementById("roadmap-chat-input");
+  const formEl = document.getElementById("roadmap-chat-form");
+
+  if (!messagesEl || !inputEl || !formEl) return;
+
+  if (!roadmapChatSessionId || resetTranscript) {
+    roadmapChatSessionId = createNewSessionId();
+  }
+
+  if (resetTranscript || !messagesEl.dataset.orbiiRoadmapGreeting) {
+    messagesEl.innerHTML = "";
+    appendRoadmapChatMessage(
+      "Hi! I’m Orbii. Choose a step in the roadmap and ask me anything about it.",
+      "orbii",
+    );
+    messagesEl.dataset.orbiiRoadmapGreeting = "true";
+    roadmapChatUserMessages = 0;
+    roadmapChatNudged = false;
+  }
+
+  async function sendToOrbii(userText) {
+    if (!currentRoadmapTopic || !currentRoadmapStep) {
+      appendRoadmapChatMessage(
+        "Pick a step in the roadmap first, then ask me about it!",
+        "orbii",
+      );
+      return;
+    }
+
+    const stepTitle = toLabel(currentRoadmapStep.title, "this step");
+    const stepId = currentRoadmapStep.domId || currentRoadmapStep.id;
+
+    const contextPrefix =
+      `You are Orbii, my friendly study buddy. ` +
+      `We are following a learning roadmap about "${currentRoadmapTopic}". ` +
+      `Right now we are on this step of the roadmap: "${stepTitle}". ` +
+      `Only answer questions related to this step or its prerequisites, ` +
+      `and keep your answers short, clear and supportive.`;
+
+    const fullMessage = `${contextPrefix}\n\nUser question: ${userText}`;
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: fullMessage,
+          sessionId: roadmapChatSessionId,
+          mode: "roadmap",
+          topic: currentRoadmapTopic,
+          stepId: stepId || stepTitle,
+        }),
+      });
+
+      const data = await res.json();
+      if (data && typeof data.sessionId === "string" && data.sessionId.trim()) {
+        roadmapChatSessionId = data.sessionId.trim();
+      }
+
+      if (data.reply) {
+        appendRoadmapChatMessage(data.reply, "orbii");
+      } else {
+        appendRoadmapChatMessage(
+          "Hmm, I had trouble replying. Try again in a moment.",
+          "orbii",
+        );
+      }
+      maybeNudgeToNextStep();
+    } catch (error) {
+      console.error("Roadmap chat error", error);
+      appendRoadmapChatMessage(
+        "Something went wrong talking to me. Please try again.",
+        "orbii",
+      );
+    }
+  }
+
+  if (!roadmapChatSetupComplete) {
+    formEl.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = inputEl.value.trim();
+      if (!text) return;
+      appendRoadmapChatMessage(text, "user");
+      roadmapChatUserMessages += 1;
+      inputEl.value = "";
+      sendToOrbii(text).catch((error) => {
+        console.error("Roadmap chat error", error);
+        appendRoadmapChatMessage(
+          "Something went wrong talking to me. Please try again.",
+          "orbii",
+        );
+      });
+    });
+
+    roadmapChatSetupComplete = true;
+  }
+
+  updateRoadmapChatLabel();
 }
 
 window.addEventListener("resize", () => {
@@ -760,7 +1066,7 @@ window.addEventListener("resize", () => {
 
   roadmapResizeTimeout = window.setTimeout(() => {
     if (roadmapCy) {
-      fitRoadmapToView(roadmapCy, 48, 1.08);
+      fitRoadmapToView(roadmapCy);
     }
   }, 180);
 });
@@ -1098,6 +1404,7 @@ createRoadmapButton?.addEventListener("click", async () => {
 
   showView("roadmap");
   renderRoadmapStatus("Loading roadmap...");
+  setupRoadmapChat();
   if (createRoadmapButton) {
     createRoadmapButton.disabled = true;
   }
@@ -1130,8 +1437,10 @@ createRoadmapButton?.addEventListener("click", async () => {
       roadmapTopicTitle.textContent = `Roadmap for: ${displayTopic}`;
     }
 
+    currentRoadmapTopic = displayTopic;
     renderRoadmap(roadmap);
     await renderRoadmapGraph(roadmap, displayTopic);
+    setupRoadmapChat({ resetTranscript: true });
   } catch (error) {
     console.error("Failed to fetch roadmap", error);
     renderRoadmapStatus(
@@ -1145,6 +1454,16 @@ createRoadmapButton?.addEventListener("click", async () => {
 });
 
 backToHomeFromRoadmap?.addEventListener("click", () => showView("home"));
+
+roadmapContent?.addEventListener("click", (event) => {
+  const card = event.target?.closest(".roadmap-section");
+  if (!card || !roadmapContent.contains(card)) return;
+
+  const sectionId = card.dataset.sectionId;
+  if (sectionId) {
+    setSelectedSection(sectionId);
+  }
+});
 
 // View modes:
 // - "home": orb hero + roadmap input + Study with me button
