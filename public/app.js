@@ -88,8 +88,19 @@ function parseRoadmapStep(stepText) {
   };
 }
 
-function renderRoadmap(roadmap) {
+function renderRoadmap(roadmap, selectedSectionId) {
   if (!roadmapContent) return;
+
+  if (!roadmap && currentRoadmap) {
+    roadmap = currentRoadmap;
+  }
+  if (!roadmap) {
+    roadmapContent.innerHTML =
+      "<p class='roadmap-status'>Enter a topic on the home screen first.</p>";
+    return;
+  }
+
+  currentRoadmap = roadmap;
   roadmapContent.innerHTML = "";
 
   const correctionNote =
@@ -109,8 +120,8 @@ function renderRoadmap(roadmap) {
       ? roadmap.overview.trim()
       : "";
   if (overview) {
-    const overviewEl = document.createElement("p");
-    overviewEl.className = "roadmap-overview";
+    const overviewEl = document.createElement("div");
+    overviewEl.className = "roadmap-overview-card";
     overviewEl.textContent = overview;
     roadmapContent.appendChild(overviewEl);
   }
@@ -121,12 +132,28 @@ function renderRoadmap(roadmap) {
     status.className = "roadmap-status";
     status.textContent = "No roadmap data available.";
     roadmapContent.appendChild(status);
+    currentSelectedSectionId = null;
     return;
   }
 
-  sections.forEach((section) => {
+  const fallbackSectionId = makeSectionDomId(sections[0], 0);
+  const hasMatchingSelection = selectedSectionId
+    ? sections.some((section, index) => makeSectionDomId(section, index) === selectedSectionId)
+    : false;
+  const defaultSectionId = hasMatchingSelection ? selectedSectionId : fallbackSectionId;
+  currentSelectedSectionId = defaultSectionId;
+
+  sections.forEach((section, index) => {
+    const sectionDomId = makeSectionDomId(section, index);
+
     const card = document.createElement("div");
     card.className = "roadmap-section";
+    card.dataset.sectionId = sectionDomId;
+    card.id = sectionDomId;
+
+    if (sectionDomId === defaultSectionId) {
+      card.classList.add("is-active");
+    }
 
     const title = document.createElement("h3");
     title.className = "roadmap-section-title";
@@ -188,6 +215,8 @@ const CYTOSCAPE_CDN =
   "https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.1/cytoscape.min.js";
 let cytoscapeLoader;
 let roadmapCy;
+let currentRoadmap = null;
+let currentSelectedSectionId = null;
 
 function toLabel(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -203,11 +232,74 @@ function toIdPart(value) {
     : "";
 }
 
+function makeSectionDomId(section, index) {
+  const titlePart = toIdPart(section?.title || "");
+  const order =
+    typeof section?.index === "number" && Number.isFinite(section.index)
+      ? section.index
+      : index + 1;
+
+  const base = titlePart || `section-${order}`;
+  return `section-${order}-${base}`;
+}
+
+function normalizeSectionCategory(category) {
+  if (typeof category !== "string") return "OTHER";
+  const normalized = category.trim().toUpperCase().replace(/\s+/g, "_");
+
+  if (normalized === "FOUNDATIONS") return "FOUNDATIONS";
+  if (normalized === "CORE_SKILLS" || normalized === "CORE") return "CORE_SKILLS";
+  if (normalized === "PROJECT") return "PROJECT";
+  if (normalized === "NEXT_STEPS" || normalized === "NEXT") return "NEXT_STEPS";
+  if (normalized.startsWith("BRANCH")) return "BRANCH";
+
+  return "OTHER";
+}
+
+function normalizeSections(sections) {
+  return sections
+    .map((section, idx) => {
+      const category = normalizeSectionCategory(section?.category);
+      const branchLabel =
+        typeof section?.branchLabel === "string" && section.branchLabel.trim()
+          ? section.branchLabel.trim()
+          : null;
+      const derivedBranchKey =
+        branchLabel && typeof section?.branchKey !== "string"
+          ? branchLabel.toLowerCase().replace(/\s+/g, "-")
+          : null;
+      const branchKey =
+        typeof section?.branchKey === "string" && section.branchKey.trim()
+          ? section.branchKey.trim()
+          : derivedBranchKey;
+
+      const index =
+        typeof section?.index === "number" && Number.isFinite(section.index)
+          ? section.index
+          : idx;
+
+      return {
+        title: toLabel(section?.title, `Section ${idx + 1}`),
+        summary: typeof section?.summary === "string" ? section.summary : "",
+        steps: Array.isArray(section?.steps)
+          ? section.steps
+              .map((step) => (typeof step === "string" ? step.trim() : ""))
+              .filter((step) => step)
+          : [],
+        category,
+        branchKey: branchKey || null,
+        branchLabel,
+        index,
+      };
+    })
+    .sort((a, b) => a.index - b.index);
+}
+
 function extractRoadmapSections(roadmap) {
   // If the backend already returned sections in the right shape, prefer those.
   const existingSections = Array.isArray(roadmap?.sections) ? roadmap.sections : [];
   if (existingSections.length) {
-    return existingSections;
+    return normalizeSections(existingSections);
   }
 
   // Fallback: build sections from nodes + edges produced by the model.
@@ -261,7 +353,7 @@ function extractRoadmapSections(roadmap) {
     return aTitle.localeCompare(bTitle);
   });
 
-  return sortedNodes.map((node, index) => {
+  const fallbackSections = sortedNodes.map((node, index) => {
     const title =
       typeof node.title === "string" && node.title.trim()
         ? node.title.trim()
@@ -278,8 +370,14 @@ function extractRoadmapSections(roadmap) {
       title,
       summary,
       steps,
+      category: "OTHER",
+      branchKey: null,
+      branchLabel: null,
+      index,
     };
   });
+
+  return normalizeSections(fallbackSections);
 }
 
 function toShortLabel(label, max = 42) {
@@ -287,6 +385,23 @@ function toShortLabel(label, max = 42) {
   const trimmed = label.trim();
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(0, max - 1).trimEnd() + "…";
+}
+
+function categoryShortLabel(category) {
+  switch (category) {
+    case "FOUNDATIONS":
+      return "Foundations";
+    case "CORE_SKILLS":
+      return "Core Skills";
+    case "PROJECT":
+      return "Project";
+    case "NEXT_STEPS":
+      return "Next Steps";
+    case "BRANCH":
+      return "Branch";
+    default:
+      return "Section";
+  }
 }
 
 function buildRoadmapElements(roadmap, topicLabel) {
@@ -303,52 +418,65 @@ function buildRoadmapElements(roadmap, topicLabel) {
     },
   ];
 
-  const sectionIds = [];
+  if (!sections.length) {
+    return { elements, topicId };
+  }
 
-  sections.forEach((section, sectionIndex) => {
-    const sectionNumber = sectionIndex + 1;
-    const rawSectionLabel = toLabel(section?.title, `Section ${sectionNumber}`);
-    const sectionLabel = toShortLabel(`${sectionNumber}. ${rawSectionLabel}`, 40);
-    const sectionId = `section-${sectionIndex}-${toIdPart(rawSectionLabel) || sectionIndex}`;
+  const mainSections = sections.filter((section) => section.category !== "BRANCH");
+  const branchSections = sections.filter((section) => section.category === "BRANCH");
+  const mainPath = mainSections.length ? mainSections : sections;
 
-    sectionIds.push(sectionId);
+  const getSectionDomId = (section) => {
+    const index = sections.indexOf(section);
+    return makeSectionDomId(section, index >= 0 ? index : 0);
+  };
+
+  const mainEntries = mainPath.map((section, sectionIndex) => {
+    const title = toLabel(section?.title, `Section ${sectionIndex + 1}`);
+    const category = normalizeSectionCategory(section?.category);
+    const categoryLabel = categoryShortLabel(category);
+    const labelPrefix = `${sectionIndex + 1}. ${categoryLabel}`;
+    const fullLabel = `${labelPrefix} – ${title}`;
+    const safeLabel = toShortLabel(fullLabel, 70);
+    const sectionId = getSectionDomId(section);
 
     elements.push({
-      data: { id: sectionId, label: sectionLabel, level: 1 },
+      data: { id: sectionId, label: safeLabel, level: 1, category, sectionId },
+    });
+
+    return {
+      sectionId,
+      category,
+    };
+  });
+
+  mainEntries.forEach((entry, idx) => {
+    const source = idx === 0 ? topicId : mainEntries[idx - 1].sectionId;
+    elements.push({
+      data: { id: `${source}-to-${entry.sectionId}`, source, target: entry.sectionId },
     });
   });
 
-  sectionIds.forEach((sectionId, idx) => {
-    const source = idx === 0 ? topicId : sectionIds[idx - 1];
+  const branchAnchor =
+    [...mainEntries].reverse().find(
+      (entry) => entry.category === "CORE_SKILLS" || entry.category === "FOUNDATIONS",
+    ) ?? mainEntries[mainEntries.length - 1];
+  const branchParentId = branchAnchor ? branchAnchor.sectionId : topicId;
+
+  branchSections.forEach((section, branchIndex) => {
+    const branchTitle = toLabel(
+      section?.branchLabel,
+      toLabel(section?.title, `Branch ${branchIndex + 1}`),
+    );
+    const sectionId = getSectionDomId(section);
+    const sectionLabel = toShortLabel(`${branchTitle} – Advanced branch`, 60);
+
     elements.push({
-      data: { id: `${source}-to-${sectionId}`, source, target: sectionId },
+      data: { id: sectionId, label: sectionLabel, level: 1, category: "BRANCH", sectionId },
     });
-  });
 
-  sections.forEach((section, sectionIndex) => {
-    const sectionNumber = sectionIndex + 1;
-    const sectionId = sectionIds[sectionIndex];
-    const steps = Array.isArray(section?.steps) ? section.steps : [];
-
-    let previousNodeId = sectionId;
-
-    steps.forEach((step, stepIndex) => {
-      const stepNumber = stepIndex + 1;
-      const rawStep = typeof step === "string" ? step : "";
-      const parsed = parseRoadmapStep(rawStep);
-      const baseLabel = parsed.text || parsed.label || `Step ${stepIndex + 1}`;
-      const numberedLabel = `${sectionNumber}.${stepNumber} ${baseLabel}`;
-      const stepLabel = toShortLabel(numberedLabel, 42);
-      const stepId = `${sectionId}-step-${stepIndex}`;
-
-      elements.push({
-        data: { id: stepId, label: stepLabel, level: 2 },
-      });
-      elements.push({
-        data: { id: `${previousNodeId}-to-${stepId}`, source: previousNodeId, target: stepId },
-      });
-
-      previousNodeId = stepId;
+    elements.push({
+      data: { id: `${branchParentId}-to-${sectionId}`, source: branchParentId, target: sectionId },
     });
   });
 
@@ -407,31 +535,56 @@ async function renderRoadmapGraph(roadmap, topic) {
     layout: {
       name: "breadthfirst",
       directed: true,
-      padding: 40,
-      spacingFactor: 1.1,
-      fit: true,
       circle: false,
-      avoidOverlap: true,
       roots: "#" + topicId,
+      padding: 40,
+      spacingFactor: 1.5,
+      animate: false,
     },
     style: [
       {
-        selector: "node",
+        selector: "node[level = 0]",
         style: {
           label: "data(label)",
+          shape: "round-rectangle",
+          width: 160,
+          height: 50,
+          "background-color": "#22d3ee",
+          "border-color": "#38bdf8",
+          "border-width": 3,
+          "font-size": 12,
+          "text-wrap": "wrap",
+          "text-max-width": "140px",
           "text-valign": "center",
           "text-halign": "center",
-          "text-wrap": "wrap",
-          "text-max-width": "90px",
-          "font-size": "11px",
-          "background-color": "#22d3ee",
-          color: "#0f172a",
-          width: "46px",
-          height: "46px",
-          "border-color": "#0ea5e9",
-          "border-width": 2,
-          "text-outline-color": "#e0f2fe",
           "text-outline-width": 1,
+          "text-outline-color": "#e0f2fe",
+        },
+      },
+      {
+        selector: "node[level = 1]",
+        style: {
+          label: "data(label)",
+          shape: "round-rectangle",
+          width: 180,
+          height: 52,
+          "background-color": "#0ea5e9",
+          "border-color": "#38bdf8",
+          "border-width": 2,
+          "font-size": 11,
+          "text-wrap": "wrap",
+          "text-max-width": "160px",
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-outline-width": 1,
+          "text-outline-color": "#e0f2fe",
+        },
+      },
+      {
+        selector: 'node[category = "BRANCH"]',
+        style: {
+          "background-color": "#22c55e",
+          "border-color": "#4ade80",
         },
       },
       {
@@ -448,15 +601,36 @@ async function renderRoadmapGraph(roadmap, topic) {
         selector: ":selected",
         style: {
           "border-width": 3,
-          "border-color": "#22c55e",
+          "border-color": "#facc15",
         },
       },
     ],
   });
 
   roadmapCy.on("tap", "node", (event) => {
-    const data = event.target.data();
-    console.log("Roadmap node selected:", data);
+    const node = event.target;
+    if (!node) return;
+
+    const sectionId = node.data("sectionId");
+    const nodeId = node.id();
+    const nodeLabel = node.data("label");
+    const nodeCategory = node.data("category");
+
+    console.log("[roadmap] node tap", {
+      nodeId,
+      nodeLabel,
+      nodeCategory,
+      sectionId,
+    });
+
+    roadmapCy.elements().removeClass("is-selected");
+    roadmapCy.elements().unselect();
+    node.addClass("is-selected");
+    node.select();
+
+    if (sectionId && currentRoadmap) {
+      renderRoadmap(null, sectionId);
+    }
   });
 }
 
@@ -815,6 +989,9 @@ createRoadmapButton?.addEventListener("click", async () => {
       roadmap.canonicalTopic.trim()
         ? roadmap.canonicalTopic.trim()
         : topic;
+
+    currentRoadmap = roadmap;
+    currentSelectedSectionId = null;
 
     if (roadmapTopic) {
       roadmapTopic.textContent = displayTopic;

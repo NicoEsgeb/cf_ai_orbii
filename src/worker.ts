@@ -20,31 +20,39 @@ const CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
 type NormalizedTopic = {
   raw: string;
-  key: string;
+  cleaned: string;
   display: string;
   wasCorrected: boolean;
 };
 
-function normalizeTopic(rawTopic: string): NormalizedTopic {
-  const raw = (rawTopic || "").trim();
+type AiChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
-  const lower = raw.toLowerCase();
-  const collapsedSpaces = lower.replace(/\s+/g, " ").trim();
-  const collapsedRepeats = collapsedSpaces.replace(/([a-z])\1{2,}/g, "$1");
+type RoadmapCategory =
+  | "FOUNDATIONS"
+  | "CORE_SKILLS"
+  | "PROJECT"
+  | "NEXT_STEPS"
+  | "BRANCH"
+  | "OTHER";
 
-  const key = collapsedRepeats;
-  const display = collapsedRepeats
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+type RoadmapSection = {
+  title: string;
+  summary: string;
+  steps: string[];
+  category?: RoadmapCategory;
+  branchLabel?: string;
+  branchKey?: string;
+  index?: number;
+};
 
-  const wasCorrected =
-    raw.length > 0 &&
-    (raw.toLowerCase().trim() !== collapsedRepeats || raw.trim() !== display);
-
-  return { raw, key, display: display || raw || "Topic", wasCorrected };
-}
+type RoadmapResponse = {
+  canonicalTopic: string;
+  correctionNote?: string;
+  overview: string;
+  sections: RoadmapSection[];
+  nodes?: RoadmapNode[];
+  edges?: RoadmapEdge[];
+};
 
 type RoadmapNode = {
   id: string;
@@ -57,25 +65,6 @@ type RoadmapEdge = {
   from: string;
   to: string;
   reason: string;
-};
-
-type RoadmapSection = {
-  title: string;
-  summary: string;
-  steps: string[];
-};
-
-type RoadmapResponse = {
-  topic: string;
-  overview: string;
-  nodes?: RoadmapNode[];
-  edges?: RoadmapEdge[];
-  sections?: RoadmapSection[];
-  canonicalTopic?: string;
-  originalTopic?: string;
-  normalizedKey?: string;
-  corrected?: boolean;
-  correctionNote?: string | null;
 };
 
 export default {
@@ -227,116 +216,259 @@ function getChatSessionStub(env: Env, sessionId: string) {
   return env.CHAT_SESSIONS.get(id);
 }
 
-function buildRoadmapPrompt(topic: string): string {
-  return [
-    "You are Orbii, a friendly but expert curriculum designer creating a self-paced course for an absolute beginner.",
-    "Design a modern learning roadmap that the learner can follow in order.",
-    "Use a fixed course skeleton so that the structure is always the same for any topic.",
-    "",
-    "Output format:",
-    "OVERVIEW: <1-2 sentence overview of what the learner will be able to do after finishing the roadmap>",
-    "SECTION: <[FOUNDATIONS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "SECTION: <[FOUNDATIONS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "SECTION: <[CORE SKILLS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "SECTION: <[CORE SKILLS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "SECTION: <[PROJECT] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "SECTION: <[NEXT STEPS] short section title> | <one-sentence summary> | <step 1> ; <step 2> ; <step 3> ; <step 4>",
-    "",
-    "Hard rules:",
-    "- You MUST output exactly one OVERVIEW line and exactly six SECTION lines, in that order.",
-    "- The six SECTION lines MUST be, in this order: [FOUNDATIONS] ..., [FOUNDATIONS] ..., [CORE SKILLS] ..., [CORE SKILLS] ..., [PROJECT] ..., [NEXT STEPS] ....",
-    "- Each SECTION line MUST have exactly four steps, separated by ';'.",
-    "- Do NOT output any extra text, headings, numbering, or commentary.",
-    "- Each summary is exactly one short sentence.",
-    "- Each section has exactly four steps.",
-    "- Each step starts with a verb and describes a 25-60 minute learning activity.",
-    "- You MAY optionally add one resource link at the end of a step, using this format: [LINK: Label for learner - https://full-url-here.com/path].",
-    "- If you add a link, it must be inside square brackets exactly in that format.",
-    "- Do not put the characters '|' or ';' inside titles, summaries, or step text. Use '|' only to separate title and summary, and ';' only to separate steps.",
-    "",
-    `Topic: ${topic}`,
-    "Now write the OVERVIEW line and the six SECTION lines.",
-  ].join("\\n");
-}
+function normalizeTopic(rawTopic: string): NormalizedTopic {
+  const raw = (rawTopic ?? "").toString();
+  const trimmed = raw.trim();
+  const collapsed = trimmed.replace(/\s+/g, " ");
+  const lower = collapsed.toLowerCase();
+  const display = lower
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 
-function parseRoadmapFromText(raw: string, topic: string): RoadmapResponse {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  let overview = "";
-  const sections: RoadmapSection[] = [];
-
-  for (const line of lines) {
-    const upper = line.toUpperCase();
-
-    if (!overview && upper.startsWith("OVERVIEW:")) {
-      overview = line.slice("OVERVIEW:".length).trim();
-      continue;
-    }
-
-    if (upper.startsWith("SECTION:")) {
-      const rest = line.slice("SECTION:".length).trim();
-      if (!rest) continue;
-
-      const parts = rest.split("|").map((part) => part.trim());
-      const title = parts[0] ?? "";
-      let summary = parts[1] ?? "";
-      let stepsPart = parts[2] ?? "";
-
-      if (!stepsPart && summary.includes(";")) {
-        const summaryPieces = summary
-          .split(";")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-
-        summary = summaryPieces.shift() ?? "";
-        if (!stepsPart && summaryPieces.length > 0) {
-          stepsPart = summaryPieces.join(" ; ");
-        }
-      }
-
-      if (!title) continue;
-
-      const steps = stepsPart
-        ? stepsPart
-            .split(";")
-            .map((step) => step.trim())
-            .filter((step) => step.length > 0)
-        : [];
-
-      const hasSummary = summary.trim().length > 0;
-      const hasSteps = steps.length > 0;
-      if (!hasSummary && !hasSteps) continue;
-
-      sections.push({
-        title,
-        summary,
-        steps,
-      });
-    }
-  }
-
-  if (!overview) {
-    overview = `A beginner-friendly roadmap for ${topic}.`;
-  }
-
-  if (sections.length === 0) {
-    sections.push({
-      title: `Getting started with ${topic}`,
-      summary: `Kick off your learning about ${topic}.`,
-      steps: [
-        `Find a beginner-friendly introduction to ${topic} (article or video).`,
-        `Note down 3–5 key ideas about ${topic}.`,
-      ],
-    });
-  }
+  const wasCorrected =
+    raw !== display ||
+    raw.toLowerCase().trim() !== lower ||
+    raw.trim() !== collapsed;
 
   return {
-    topic,
-    overview,
-    sections,
+    raw,
+    cleaned: collapsed,
+    display: display || collapsed || "Topic",
+    wasCorrected,
+  };
+}
+
+function buildCanonicalTopicMessages(
+  rawTopic: string,
+  normalized: NormalizedTopic,
+): AiChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: "Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners.",
+    },
+    {
+      role: "user",
+      content: `Given a raw topic string, return JSON only with "canonicalTopic" (clean, title-case, correctly spelled topic) and "correctionNote" (null if unchanged, otherwise: Showing roadmap for "<canonicalTopic>" (you typed "<rawTopic>").).
+Raw input: "${rawTopic}"
+Normalized guess: "${normalized.display}"
+Rules:
+- Collapse multiple spaces.
+- Fix obvious casing and spelling issues if clear.
+- Do not add explanations or any text outside JSON.
+- Output must be JSON only with keys: canonicalTopic, correctionNote.`,
+    },
+  ];
+}
+
+function parseCanonicalTopicResponse(
+  raw: string,
+  normalized: NormalizedTopic,
+): { canonicalTopic: string; correctionNote?: string } {
+  let canonicalTopic = normalized.display;
+  let correctionNote: string | undefined;
+
+  try {
+    const parsed = JSON.parse(raw ?? "{}");
+    if (parsed && typeof parsed === "object") {
+      const parsedCanonical =
+        typeof (parsed as any).canonicalTopic === "string"
+          ? (parsed as any).canonicalTopic.trim()
+          : "";
+      const parsedNote =
+        typeof (parsed as any).correctionNote === "string"
+          ? (parsed as any).correctionNote.trim()
+          : "";
+
+      if (parsedCanonical) {
+        canonicalTopic = parsedCanonical;
+      }
+
+      if (parsedNote) {
+        correctionNote = parsedNote;
+      }
+    }
+  } catch {
+    // Fall back to normalized guess below.
+  }
+
+  if (!correctionNote && normalized.raw && canonicalTopic !== normalized.raw.trim()) {
+    correctionNote = `Showing roadmap for "${canonicalTopic}" (you typed "${normalized.raw.trim()}").`;
+  }
+
+  return { canonicalTopic, correctionNote };
+}
+
+function buildRoadmapPrompt(canonicalTopic: string): string {
+  return `Return a single JSON object matching this TypeScript shape:
+type RoadmapCategory = "FOUNDATIONS" | "CORE_SKILLS" | "PROJECT" | "NEXT_STEPS" | "BRANCH" | "OTHER";
+interface RoadmapSection {
+  title: string;
+  summary: string;
+  steps: string[];
+  category?: RoadmapCategory;
+  branchLabel?: string;
+  branchKey?: string;
+  index?: number;
+}
+interface RoadmapResponse {
+  canonicalTopic: string;
+  correctionNote?: string;
+  overview: string;
+  sections: RoadmapSection[];
+}
+
+Generate a stable beginner roadmap for canonicalTopic = "${canonicalTopic}".
+
+Rules:
+- You are Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners.
+- Output valid JSON only, no markdown or comments.
+- Return ONLY a single JSON object, with no backticks, no markdown fences, and no extra explanation text before or after the JSON.
+- For the same canonicalTopic, always reuse the same overall section structure, titles, categories, and branching layout as a reusable course template. Only minor wording tweaks in summaries/steps are allowed between runs.
+- Main path order with index numbers starting at 1: 2-3 sections with category "FOUNDATIONS", then 2-3 with "CORE_SKILLS", then exactly one "PROJECT", then exactly one "NEXT_STEPS".
+- Branches: If the topic has natural specialisations, add 2-4 sections with category "BRANCH" (after core skills). Each BRANCH includes branchLabel (short name), branchKey (kebab-case slug), its own title/summary, and 3-5 steps focused on that sub-field.
+- Every section has 3-6 steps. Each step starts with a verb and is a 20-60 minute task (watch, read, practice, build, quiz). Include 1-2 high-quality external resources across the whole roadmap using the exact pattern: [LINK: Label - https://example.com/path]. Do not use square brackets for anything else.
+- Summaries are one friendly sentence for absolute beginners.
+- Use the canonicalTopic exactly as given. Variants like misspellings or casing still map to this same structure.
+`;
+}
+
+function normalizeCategory(value: unknown): RoadmapCategory | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toUpperCase().replace(/\s+/g, "_");
+  if (normalized === "FOUNDATIONS") return "FOUNDATIONS";
+  if (normalized === "CORE_SKILLS") return "CORE_SKILLS";
+  if (normalized === "PROJECT") return "PROJECT";
+  if (normalized === "NEXT_STEPS") return "NEXT_STEPS";
+  if (normalized === "BRANCH") return "BRANCH";
+  return "OTHER";
+}
+
+function parseRoadmapResponseText(
+  raw: string,
+  canonicalTopic: string,
+  correctionNote?: string,
+): RoadmapResponse | null {
+  try {
+    let cleaned = raw.trim();
+    cleaned = cleaned.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const overview =
+      typeof (parsed as any).overview === "string" && (parsed as any).overview.trim()
+        ? (parsed as any).overview.trim()
+        : "";
+
+    const rawSections = Array.isArray((parsed as any).sections) ? (parsed as any).sections : [];
+    const sections: RoadmapSection[] = rawSections
+      .map((section: any, idx: number) => {
+        if (!section || typeof section !== "object") return null;
+
+        const title =
+          typeof section.title === "string" && section.title.trim()
+            ? section.title.trim()
+            : `Section ${idx + 1}`;
+        const summary =
+          typeof section.summary === "string" && section.summary.trim()
+            ? section.summary.trim()
+            : "";
+        const steps = Array.isArray(section.steps)
+          ? section.steps
+              .map((step: unknown) => (typeof step === "string" ? step.trim() : ""))
+              .filter((step: string) => step.length > 0)
+          : [];
+
+        if (!title && !summary && steps.length === 0) {
+          return null;
+        }
+
+        const category = normalizeCategory(section.category);
+        const index =
+          typeof section.index === "number" && Number.isFinite(section.index)
+            ? section.index
+            : idx + 1;
+
+        const branchLabel =
+          category === "BRANCH" && typeof section.branchLabel === "string"
+            ? section.branchLabel.trim()
+            : undefined;
+        const branchKey =
+          category === "BRANCH" && typeof section.branchKey === "string"
+            ? section.branchKey.trim()
+            : undefined;
+
+        return {
+          title,
+          summary,
+          steps,
+          category,
+          branchLabel,
+          branchKey,
+          index,
+        };
+      })
+      .filter(Boolean) as RoadmapSection[];
+
+    if (!sections.length) {
+      return null;
+    }
+
+    const parsedCanonical =
+      typeof (parsed as any).canonicalTopic === "string" && (parsed as any).canonicalTopic.trim()
+        ? (parsed as any).canonicalTopic.trim()
+        : canonicalTopic;
+
+    const parsedCorrection =
+      typeof (parsed as any).correctionNote === "string" && (parsed as any).correctionNote.trim()
+        ? (parsed as any).correctionNote.trim()
+        : correctionNote;
+
+    const nodes = Array.isArray((parsed as any).nodes) ? (parsed as any).nodes : undefined;
+    const edges = Array.isArray((parsed as any).edges) ? (parsed as any).edges : undefined;
+
+    return {
+      canonicalTopic: parsedCanonical,
+      correctionNote: parsedCorrection,
+      overview: overview || `A beginner-friendly roadmap for ${parsedCanonical}.`,
+      sections,
+      nodes,
+      edges,
+    };
+  } catch {
+    console.error("Roadmap JSON parse failed", {
+      snippet: raw.slice(0, 500),
+    });
+    return null;
+  }
+}
+
+function buildFallbackRoadmap(
+  canonicalTopic: string,
+  correctionNote?: string,
+): RoadmapResponse {
+  return {
+    canonicalTopic: canonicalTopic || "Topic",
+    correctionNote,
+    overview: `We couldn't build a full roadmap for ${canonicalTopic || "this topic"} right now.`,
+    sections: [
+      {
+        title: `Getting started with ${canonicalTopic || "the topic"}`,
+        summary: `Kick off your learning about ${canonicalTopic || "this topic"}.`,
+        steps: [
+          `Watch or read a beginner-friendly introduction to ${canonicalTopic || "the topic"}.`,
+          `Write down 3-5 key ideas you learned about ${canonicalTopic || "the topic"}.`,
+          `Try one small practice task to apply a concept from ${canonicalTopic || "the topic"}.`,
+        ],
+        category: "FOUNDATIONS",
+        index: 1,
+      },
+    ],
   };
 }
 
@@ -352,25 +484,58 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
     });
   }
 
-  const normalized = normalizeTopic(rawTopic || "Untitled topic");
-  if (!normalized.key.trim()) {
+  const normalized = normalizeTopic(rawTopic || "Topic");
+  if (!normalized.cleaned.trim()) {
     return new Response(JSON.stringify({ error: "Missing topic" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const topicForPrompt = normalized.display;
+  console.log("Generating roadmap for topic:", normalized.cleaned);
 
-  console.log("Generating roadmap for topic:", normalized.key);
+  let canonicalTopic = normalized.display;
+  let correctionNote: string | undefined;
+
+  try {
+    const canonicalMessages = buildCanonicalTopicMessages(rawTopic, normalized);
+    const canonicalResult = (await (env.AI as any).run(CHAT_MODEL, {
+      messages: canonicalMessages,
+      temperature: 0,
+      max_tokens: 200,
+    })) as { response?: string };
+
+    const canonicalRaw =
+      typeof canonicalResult === "string"
+        ? canonicalResult
+        : (canonicalResult?.response ?? JSON.stringify(canonicalResult));
+
+    const canonicalParsed = parseCanonicalTopicResponse(
+      (canonicalRaw ?? "").toString(),
+      normalized,
+    );
+    canonicalTopic = canonicalParsed.canonicalTopic || normalized.display;
+    correctionNote = canonicalParsed.correctionNote;
+  } catch (error) {
+    console.error("Canonical topic resolution failed", error);
+    if (normalized.wasCorrected && normalized.raw.trim()) {
+      correctionNote = `Showing roadmap for "${canonicalTopic}" (you typed "${normalized.raw.trim()}").`;
+    }
+  }
 
   let raw: string | undefined;
   try {
-    const prompt = buildRoadmapPrompt(topicForPrompt);
+    const prompt = buildRoadmapPrompt(canonicalTopic);
     const aiResult = (await (env.AI as any).run(CHAT_MODEL, {
-      prompt,
+      messages: [
+        {
+          role: "system",
+          content: "Orbii, an expert curriculum designer that outputs JSON roadmaps for beginners.",
+        },
+        { role: "user", content: prompt },
+      ],
       temperature: 0,
-      max_tokens: 900,
+      max_tokens: 1500,
     })) as { response?: string };
 
     const rawCandidate =
@@ -379,18 +544,8 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
         : (aiResult?.response ?? JSON.stringify(aiResult));
     raw = (rawCandidate ?? "").toString();
 
-    const roadmap = parseRoadmapFromText(raw, normalized.display);
-    const responsePayload: RoadmapResponse = {
-      ...roadmap,
-      topic: normalized.display,
-      canonicalTopic: normalized.display,
-      originalTopic: normalized.raw,
-      normalizedKey: normalized.key,
-      corrected: normalized.wasCorrected,
-      correctionNote: normalized.wasCorrected
-        ? `Showing roadmap for "${normalized.display}" (you typed "${normalized.raw}").`
-        : null,
-    };
+    const roadmap = parseRoadmapResponseText(raw, canonicalTopic, correctionNote);
+    const responsePayload = roadmap ?? buildFallbackRoadmap(canonicalTopic, correctionNote);
 
     return new Response(JSON.stringify(responsePayload), {
       status: 200,
@@ -398,8 +553,9 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
     });
   } catch (error) {
     console.error("Roadmap generation failed; raw output:", raw, error);
-    return new Response(JSON.stringify({ error: "roadmap_generation_error" }), {
-      status: 500,
+    const fallbackPayload = buildFallbackRoadmap(canonicalTopic, correctionNote);
+    return new Response(JSON.stringify(fallbackPayload), {
+      status: 200,
       headers: { "Content-Type": "application/json" },
     });
   }
