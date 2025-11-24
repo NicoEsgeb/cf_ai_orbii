@@ -133,6 +133,7 @@ function renderRoadmap(roadmap, selectedSectionId) {
       "<p class='roadmap-status'>Enter a topic on the home screen first.</p>";
     currentRoadmapSections = [];
     currentRoadmapStep = null;
+    roadmapTaskSelection = null;
     roadmapChatUserMessages = 0;
     roadmapChatNudged = false;
     updateRoadmapChatLabel();
@@ -181,10 +182,20 @@ function renderRoadmap(roadmap, selectedSectionId) {
   }
 
   const sections = extractRoadmapSections(roadmap);
-  const sectionsWithDomIds = sections.map((section, index) => ({
-    ...section,
-    domId: makeSectionDomId(section, index),
-  }));
+  const sectionsWithDomIds = sections.map((section, index) => {
+    const sectionDomId = makeSectionDomId(section, index);
+    const stepsWithDomIds = Array.isArray(section?.steps)
+      ? section.steps.map((step, stepIndex) => ({
+          ...step,
+          domId: makeStepDomId(sectionDomId, step, stepIndex),
+        }))
+      : [];
+    return {
+      ...section,
+      domId: sectionDomId,
+      steps: stepsWithDomIds,
+    };
+  });
 
   if (!sectionsWithDomIds.length) {
     const status = document.createElement("p");
@@ -250,16 +261,39 @@ function renderRoadmap(roadmap, selectedSectionId) {
     if (steps.length) {
       const list = document.createElement("ul");
       list.className = "roadmap-step-list";
-      steps.forEach((step) => {
+      steps.forEach((step, stepIndex) => {
         if (!step || typeof step !== "object") return;
 
         const li = document.createElement("li");
         li.className = "roadmap-step-item";
+        const stepDomId = makeStepDomId(sectionDomId, step, stepIndex);
+        li.dataset.stepId = stepDomId;
+        li.dataset.sectionId = sectionDomId;
+        const completed = isStepCompleted(currentRoadmapTopic, stepDomId);
+        if (completed) {
+          li.classList.add("is-completed");
+        }
+        if (roadmapTaskSelection && roadmapTaskSelection === stepDomId) {
+          li.classList.add("is-active");
+        }
+
+        const stepHeader = document.createElement("div");
+        stepHeader.className = "roadmap-step-header";
 
         const stepTitle = document.createElement("div");
         stepTitle.className = "roadmap-step-title";
         stepTitle.textContent = toLabel(step?.title, "Step");
-        li.appendChild(stepTitle);
+
+        const completeToggle = document.createElement("button");
+        completeToggle.type = "button";
+        completeToggle.className = `roadmap-step-toggle ${completed ? "is-completed" : ""}`;
+        completeToggle.textContent = completed ? "Completed" : "Mark done";
+        completeToggle.dataset.stepId = stepDomId;
+        completeToggle.dataset.sectionId = sectionDomId;
+
+        stepHeader.appendChild(stepTitle);
+        stepHeader.appendChild(completeToggle);
+        li.appendChild(stepHeader);
 
         if (typeof step?.summary === "string" && step.summary.trim()) {
           const stepSummary = document.createElement("div");
@@ -314,12 +348,56 @@ function scrollStepIntoView(stepId) {
   });
 }
 
+function getCurrentSectionDomId() {
+  if (!currentRoadmapStep) return null;
+  const sectionId = currentRoadmapStep.domId || currentRoadmapStep.id;
+  if (sectionId) return sectionId;
+  const idx = currentRoadmapSections.findIndex(
+    (section) => section === currentRoadmapStep || section.domId === sectionId,
+  );
+  return makeSectionDomId(currentRoadmapStep, idx >= 0 ? idx : 0);
+}
+
+function getCurrentTaskTitle() {
+  if (!currentRoadmapStep || !roadmapTaskSelection) return null;
+  const steps = Array.isArray(currentRoadmapStep.steps) ? currentRoadmapStep.steps : [];
+  const sectionDomId = getCurrentSectionDomId();
+  if (!sectionDomId) return null;
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i];
+    const domId = makeStepDomId(sectionDomId, step, i);
+    if (domId === roadmapTaskSelection) {
+      return toLabel(step?.title, null);
+    }
+  }
+  return null;
+}
+
+function findStepByDomId(stepDomId) {
+  if (!stepDomId || !currentRoadmapSections.length) return null;
+  for (let i = 0; i < currentRoadmapSections.length; i += 1) {
+    const section = currentRoadmapSections[i];
+    const steps = Array.isArray(section?.steps) ? section.steps : [];
+    for (let j = 0; j < steps.length; j += 1) {
+      const step = steps[j];
+      const domId = makeStepDomId(section?.domId, step, j);
+      if (domId === stepDomId) {
+        return { section, step, stepIndex: j };
+      }
+    }
+  }
+  return null;
+}
+
 function updateRoadmapChatLabel() {
   const stepLabelEl = document.getElementById("roadmap-chat-step-label");
   if (!stepLabelEl) return;
   if (currentRoadmapStep) {
     const label = toLabel(currentRoadmapStep.title, "this step");
-    stepLabelEl.textContent = `Chatting about: ${label}`;
+    const taskLabel = getCurrentTaskTitle();
+    stepLabelEl.textContent = taskLabel
+      ? `Chatting about: ${label} • ${taskLabel}`
+      : `Chatting about: ${label}`;
   } else {
     stepLabelEl.textContent = "Select a step to start chatting.";
   }
@@ -355,6 +433,8 @@ function getNextRoadmapSection() {
 function maybeNudgeToNextStep() {
   if (roadmapChatNudged) return;
   if (roadmapChatUserMessages < 4) return;
+  const progress = currentRoadmapStep ? getStepProgress(currentRoadmapStep) : null;
+  if (!progress || progress.pendingTitles.length > 0) return;
   const nextSection = getNextRoadmapSection();
   if (!nextSection) return;
   appendRoadmapChatMessage(
@@ -378,7 +458,189 @@ let roadmapChatSetupComplete = false;
 let roadmapChatUserMessages = 0;
 let roadmapChatNudged = false;
 let roadmapChatSessionId = null;
+let roadmapTaskSelection = null;
+const ROADMAP_PROGRESS_KEY = "orbii-roadmap-progress";
+let roadmapProgress = loadRoadmapProgress();
+const quizCache = {};
+let quizModal;
+let quizModalContent;
+let quizModalQuestion;
+let quizModalOptions;
+let quizModalClose;
 
+function loadRoadmapProgress() {
+  try {
+    const raw = window.localStorage?.getItem(ROADMAP_PROGRESS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch (error) {
+    console.warn("Unable to load roadmap progress", error);
+  }
+  return {};
+}
+
+function persistRoadmapProgress() {
+  try {
+    window.localStorage?.setItem(ROADMAP_PROGRESS_KEY, JSON.stringify(roadmapProgress));
+  } catch (error) {
+    console.warn("Unable to persist roadmap progress", error);
+  }
+}
+
+function isStepCompleted(topic, stepId) {
+  if (!topic || !stepId) return false;
+  const topicKey = topic.toLowerCase();
+  return Boolean(roadmapProgress?.[topicKey]?.[stepId]);
+}
+
+function setStepCompleted(topic, stepId, done) {
+  if (!topic || !stepId) return;
+  const topicKey = topic.toLowerCase();
+  if (!roadmapProgress[topicKey]) {
+    roadmapProgress[topicKey] = {};
+  }
+  if (done) {
+    roadmapProgress[topicKey][stepId] = true;
+  } else {
+    delete roadmapProgress[topicKey][stepId];
+  }
+  persistRoadmapProgress();
+}
+
+function getStepProgress(section) {
+  const steps = Array.isArray(section?.steps) ? section.steps : [];
+  const pendingTitles = [];
+  const completedTitles = [];
+  steps.forEach((step) => {
+    const stepId = step?.domId || step?.id || step?.title;
+    const title = toLabel(step?.title, "");
+    if (!stepId || !title) return;
+    if (isStepCompleted(currentRoadmapTopic, stepId)) {
+      completedTitles.push(title);
+    } else {
+      pendingTitles.push(title);
+    }
+  });
+  return { pendingTitles, completedTitles };
+}
+
+function ensureQuizModal() {
+  if (quizModal) return;
+  quizModal = document.createElement("div");
+  quizModal.className = "quiz-modal-overlay hidden";
+  quizModal.innerHTML = `
+    <div class="quiz-modal">
+      <div class="quiz-modal-header">
+        <h3>Quick check-in</h3>
+        <button type="button" class="quiz-modal-close" aria-label="Close quiz">&times;</button>
+      </div>
+      <div class="quiz-modal-body">
+        <p class="quiz-modal-question"></p>
+        <div class="quiz-modal-options"></div>
+        <p class="quiz-modal-status"></p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(quizModal);
+  quizModalContent = quizModal.querySelector(".quiz-modal");
+  quizModalQuestion = quizModal.querySelector(".quiz-modal-question");
+  quizModalOptions = quizModal.querySelector(".quiz-modal-options");
+  quizModalClose = quizModal.querySelector(".quiz-modal-close");
+  const statusEl = quizModal.querySelector(".quiz-modal-status");
+
+  quizModalClose?.addEventListener("click", hideQuizModal);
+  quizModal.addEventListener("click", (event) => {
+    if (event.target === quizModal) hideQuizModal();
+  });
+
+  quizModal.showStatus = (message, tone = "info") => {
+    if (!statusEl) return;
+    statusEl.textContent = message || "";
+    statusEl.dataset.tone = tone;
+  };
+}
+
+function hideQuizModal() {
+  if (!quizModal) return;
+  quizModal.classList.add("hidden");
+  quizModalQuestion.textContent = "";
+  quizModalOptions.innerHTML = "";
+  quizModal.showStatus?.("", "info");
+}
+
+function renderQuizModal(quiz, stepId, sectionId) {
+  ensureQuizModal();
+  quizModal.classList.remove("hidden");
+  quizModalQuestion.textContent = quiz.question;
+  quizModalOptions.innerHTML = "";
+  quizModal.showStatus?.("", "info");
+
+  const letters = ["A", "B", "C", "D"];
+  quiz.options.forEach((opt, idx) => {
+    const letter = letters[idx] || String.fromCharCode(65 + idx);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiz-option";
+    button.textContent = `${letter}. ${opt}`;
+    button.addEventListener("click", () => {
+      const correct = quiz.correctOption?.trim().toUpperCase() || "A";
+      if (letter.toUpperCase() === correct) {
+        quizModal.showStatus?.("Nice! Marked as completed.", "success");
+        setStepCompleted(currentRoadmapTopic, stepId, true);
+        hideQuizModal();
+        renderRoadmap(currentRoadmap, sectionId || currentSelectedSectionId);
+        roadmapTaskSelection = null;
+      } else {
+        quizModal.showStatus?.("Not quite. Try another option.", "error");
+      }
+    });
+    quizModalOptions.appendChild(button);
+  });
+}
+
+async function loadQuiz(stepId, sectionId) {
+  if (!currentRoadmapTopic) throw new Error("Missing topic");
+  const lookup = findStepByDomId(stepId);
+  if (!lookup) throw new Error("Step not found");
+  const { step } = lookup;
+  if (quizCache[stepId]) return quizCache[stepId];
+
+  const body = {
+    topic: currentRoadmapTopic,
+    stepTitle: toLabel(step?.title, "this step"),
+    stepSummary: toLabel(step?.summary, ""),
+  };
+
+  const res = await fetch("/api/quiz", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Quiz request failed: ${res.status}`);
+  const quiz = await res.json();
+  if (!quiz || !quiz.question || !Array.isArray(quiz.options)) {
+    throw new Error("Invalid quiz payload");
+  }
+  quizCache[stepId] = quiz;
+  return quiz;
+}
+
+async function startQuizForStep(stepId, sectionId) {
+  ensureQuizModal();
+  quizModalQuestion.textContent = "Loading quiz…";
+  quizModalOptions.innerHTML = "";
+  quizModal.showStatus?.("", "info");
+  quizModal.classList.remove("hidden");
+
+  try {
+    const quiz = await loadQuiz(stepId, sectionId);
+    renderQuizModal(quiz, stepId, sectionId);
+  } catch (error) {
+    console.error("Quiz load failed", error);
+    quizModal.showStatus?.("Couldn't load a quiz right now. Please try again.", "error");
+  }
+}
 function toLabel(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -402,6 +664,15 @@ function makeSectionDomId(section, index) {
 
   const base = titlePart || `section-${order}`;
   return `section-${order}-${base}`;
+}
+
+function makeStepDomId(sectionDomId, step, index) {
+  const sectionPart = sectionDomId || "section";
+  const stepPart = toIdPart(step?.id || step?.title || "");
+  const idx = Number.isFinite(index) ? index : 0;
+  if (step?.domId) return step.domId;
+  if (stepPart) return `${sectionPart}__${stepPart}`;
+  return `${sectionPart}__${idx}`;
 }
 
 function normalizeSectionCategory(category) {
@@ -737,9 +1008,13 @@ function clampZoomValue(value, minZoom, maxZoom) {
 function setSelectedSection(sectionId, options = {}) {
   if (!sectionId || !currentRoadmap) return;
   const { fromGraph = false } = options;
+  const previousSectionId = currentSelectedSectionId;
 
   const activeSectionId = renderRoadmap(null, sectionId);
   if (!activeSectionId) return;
+  if (activeSectionId !== previousSectionId) {
+    roadmapTaskSelection = null;
+  }
 
   if (roadmapCy && !fromGraph) {
     const node = roadmapCy.$id(activeSectionId);
@@ -990,6 +1265,8 @@ function setupRoadmapChat(options = {}) {
 
     const stepTitle = toLabel(currentRoadmapStep.title, "this step");
     const stepId = currentRoadmapStep.domId || currentRoadmapStep.id;
+    const { pendingTitles, completedTitles } = getStepProgress(currentRoadmapStep);
+    const taskFocus = getCurrentTaskTitle();
 
     const contextPrefix =
       `You are Orbii, my friendly study buddy. ` +
@@ -998,7 +1275,27 @@ function setupRoadmapChat(options = {}) {
       `Only answer questions related to this step or its prerequisites, ` +
       `and keep your answers short, clear and supportive.`;
 
-    const fullMessage = `${contextPrefix}\n\nUser question: ${userText}`;
+    const progressContextParts = [];
+    if (taskFocus) {
+      progressContextParts.push(`Current task to focus on: "${taskFocus}".`);
+    }
+    if (pendingTitles.length) {
+      progressContextParts.push(
+        `Pending tasks in this step: ${pendingTitles.map((t) => `"${t}"`).join(", ")}. ` +
+          `Guide the user through them one by one and check understanding before moving on.`,
+      );
+    } else {
+      progressContextParts.push(
+        "All tasks in this step are marked complete. Offer a quick recap or suggest moving to the next roadmap step.",
+      );
+    }
+    if (completedTitles.length) {
+      progressContextParts.push(`Already done: ${completedTitles.join(", ")}.`);
+    }
+
+    const progressContext = progressContextParts.join(" ");
+
+    const fullMessage = `${contextPrefix}\n${progressContext}\n\nUser question: ${userText}`;
 
     try {
       const res = await fetch("/api/chat", {
@@ -1390,7 +1687,10 @@ if (window.matchMedia && window.matchMedia("(max-width: 640px)").matches) {
   setChatOpen(true);
 }
 
-goToStudyButton?.addEventListener("click", () => showView("study"));
+if (goToStudyButton) {
+  goToStudyButton.disabled = true;
+  goToStudyButton.title = "File study uploads are coming soon.";
+}
 backToHomeFromStudy?.addEventListener("click", () => showView("home"));
 
 createRoadmapButton?.addEventListener("click", async () => {
@@ -1430,6 +1730,7 @@ createRoadmapButton?.addEventListener("click", async () => {
 
     currentRoadmap = roadmap;
     currentSelectedSectionId = null;
+    roadmapTaskSelection = null;
 
     if (roadmapTopic) {
       roadmapTopic.textContent = displayTopic;
@@ -1456,6 +1757,35 @@ createRoadmapButton?.addEventListener("click", async () => {
 backToHomeFromRoadmap?.addEventListener("click", () => showView("home"));
 
 roadmapContent?.addEventListener("click", (event) => {
+  const toggle = event.target?.closest(".roadmap-step-toggle");
+  if (toggle && roadmapContent.contains(toggle)) {
+    const stepId = toggle.dataset.stepId;
+    const sectionId = toggle.dataset.sectionId;
+    if (currentRoadmapTopic && stepId) {
+      const alreadyCompleted = isStepCompleted(currentRoadmapTopic, stepId);
+      if (alreadyCompleted) {
+        setStepCompleted(currentRoadmapTopic, stepId, false);
+        renderRoadmap(currentRoadmap, sectionId || currentSelectedSectionId);
+      } else {
+        startQuizForStep(stepId, sectionId).catch((error) => {
+          console.error("Quiz flow error", error);
+        });
+      }
+    }
+    return;
+  }
+
+  const stepItem = event.target?.closest(".roadmap-step-item");
+  if (stepItem && roadmapContent.contains(stepItem)) {
+    const stepId = stepItem.dataset.stepId;
+    const sectionId = stepItem.dataset.sectionId;
+    roadmapTaskSelection = stepId || null;
+    if (sectionId) {
+      setSelectedSection(sectionId);
+    }
+    return;
+  }
+
   const card = event.target?.closest(".roadmap-section");
   if (!card || !roadmapContent.contains(card)) return;
 

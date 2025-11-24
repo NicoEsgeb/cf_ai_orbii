@@ -74,6 +74,12 @@ type RoadmapEdge = {
   reason: string;
 };
 
+type QuizResponse = {
+  question: string;
+  options: string[];
+  correctOption: string;
+};
+
 export default {
   async fetch(
     request: Request,
@@ -112,11 +118,15 @@ export default {
       return stub.fetch(request);
     }
 
-    if (url.pathname === "/api/roadmap" && request.method === "POST") {
-      return handleRoadmapRequest(request, env);
-    }
+  if (url.pathname === "/api/roadmap" && request.method === "POST") {
+    return handleRoadmapRequest(request, env);
+  }
 
-    if (url.pathname === "/api/study-text" && request.method === "POST") {
+  if (url.pathname === "/api/quiz" && request.method === "POST") {
+    return handleQuizRequest(request, env);
+  }
+
+  if (url.pathname === "/api/study-text" && request.method === "POST") {
       let body: { sessionId?: unknown; text?: unknown };
       try {
         body = (await request.clone().json()) as {
@@ -340,7 +350,7 @@ Rules:
 - Follow the RoadmapResponse interface exactly: include canonicalTopic, overview, sections (with steps), and optional correctionNote. Optional nodes/edges are allowed but not required.
 - Build a clear linear main path from beginner to next steps: 2-3 FOUNDATIONS sections, then 2-3 CORE_SKILLS sections, then exactly one PROJECT, then exactly one NEXT_STEPS.
 - Add BRANCH sections (2-4) only if the topic has obvious specialisations. Place them after CORE_SKILLS. Each BRANCH must include branchLabel (short name) and branchKey (kebab-case slug), along with its own title, summary, and 3-5 steps.
-- Every section has 3-6 steps. Steps start with a verb and are 20-60 minute tasks (watch, read, practice, build, quiz).
+- Every section has 3-6 steps. Steps start with a verb and are 20-60 minute talk/practice prompts that can be completed within a guided chat. Do NOT include real-world logistics (budgets, conferences, events, procurement, travel, onboarding, job applications).
 - Resources: provide 1-3 short search-style suggestions only. Never include URLs, domains, YouTube IDs, channel names, HTML, or markdown. Use wording like "Watch a short explainer on volcanoes (search on YouTube)" or "Read an intro to crystal lattice basics (search 'crystal lattice beginner article')".
 - Summaries are one friendly sentence for absolute beginners.
 - Use the canonicalTopic exactly as provided; keep the same structure on repeat calls for consistency.
@@ -365,7 +375,7 @@ Reply with JSON only using this shape:
 
 Rules:
 - Each section has 3-5 steps.
-- Steps start with a verb and include 1-3 short search-style resource hints (no URLs or channel names).
+- Steps start with a verb and are talk/practice prompts you can complete in a guided chat (no real-world logistics like budgets/events). Include 1-3 short search-style resource hints (no URLs or channel names).
 - Keep summaries to one friendly sentence for beginners.
 - Output valid JSON only—no prose, no backticks.`;
 }
@@ -838,6 +848,51 @@ function buildFallbackRoadmap(
   };
 }
 
+function buildQuizPrompt(topic: string, stepTitle: string, stepSummary: string): string {
+  return `Create one short multiple-choice check-in question to verify a beginner understands this roadmap task.
+Topic: "${topic}"
+Task title: "${stepTitle}"
+Task summary: "${stepSummary}"
+
+Rules:
+- Output JSON only with keys: question (string), options (array of 3-4 concise strings), correctOption (string letter A-D).
+- Keep it focused on conceptual understanding; no real-world logistics (budgets, events, procurement).
+- Make only one correct answer. Keep options short (under 80 characters).
+- Do NOT include explanations, markdown, or any text outside the JSON.`;
+}
+
+function parseQuizResponse(raw: string, fallback: QuizResponse): QuizResponse {
+  if (!raw || typeof raw !== "string") return fallback;
+  const cleaned = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object") {
+      const question =
+        typeof (parsed as any).question === "string" && (parsed as any).question.trim()
+          ? (parsed as any).question.trim()
+          : fallback.question;
+      const optionsRaw = Array.isArray((parsed as any).options) ? (parsed as any).options : [];
+      const options = optionsRaw
+        .map((opt: unknown) => (typeof opt === "string" ? opt.trim() : ""))
+        .filter(Boolean)
+        .slice(0, 4);
+      const correct =
+        typeof (parsed as any).correctOption === "string" && (parsed as any).correctOption.trim()
+          ? (parsed as any).correctOption.trim()
+          : "";
+      const correctOption = options.length ? correct || "A" : fallback.correctOption;
+      if (question && options.length && correctOption) {
+        return { question, options, correctOption };
+      }
+    }
+  } catch {
+    // ignore parse error and fall back
+  }
+
+  return fallback;
+}
+
 async function handleRoadmapRequest(request: Request, env: Env): Promise<Response> {
   let rawTopic: string;
   try {
@@ -936,6 +991,72 @@ async function handleRoadmapRequest(request: Request, env: Env): Promise<Respons
     console.error("Roadmap generation failed; raw output:", rawPrimary, error);
     const fallbackPayload = buildFallbackRoadmap(canonicalTopic, correctionNote);
     return new Response(JSON.stringify(fallbackPayload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+}
+
+async function handleQuizRequest(request: Request, env: Env): Promise<Response> {
+  let topic = "";
+  let stepTitle = "";
+  let stepSummary = "";
+
+  try {
+    const body = (await request.clone().json()) as {
+      topic?: unknown;
+      stepTitle?: unknown;
+      stepSummary?: unknown;
+    };
+    topic = typeof body.topic === "string" ? body.topic.trim() : "";
+    stepTitle = typeof body.stepTitle === "string" ? body.stepTitle.trim() : "";
+    stepSummary = typeof body.stepSummary === "string" ? body.stepSummary.trim() : "";
+  } catch {
+    // ignored; defaults will trigger fallback
+  }
+
+  const normalized = normalizeTopic(topic || "Topic");
+  const canonicalTopic = normalized.display || "Topic";
+  const safeStepTitle = stepTitle || "this step";
+  const safeSummary = stepSummary || "";
+
+  const fallbackQuiz: QuizResponse = {
+    question: `What is the main idea of "${safeStepTitle}"?`,
+    options: [
+      safeSummary || `It's about understanding ${canonicalTopic}.`,
+      `It's unrelated to ${canonicalTopic}.`,
+      `It's mainly about logistics like budgets and travel.`,
+      `It's about memorizing random facts.`,
+    ],
+    correctOption: "A",
+  };
+
+  try {
+    const prompt = buildQuizPrompt(canonicalTopic, safeStepTitle, safeSummary);
+    const aiResult = (await (env.AI as any).run(CHAT_MODEL, {
+      messages: [
+        {
+          role: "system",
+          content:
+            "You generate one short multiple-choice quiz question. Reply with JSON only (question, options, correctOption). Keep it conceptual and chat-friendly.",
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+      max_tokens: 300,
+    })) as { response?: string };
+
+    const raw =
+      typeof aiResult === "string" ? aiResult : (aiResult?.response ?? JSON.stringify(aiResult));
+    const quiz = parseQuizResponse((raw ?? "").toString(), fallbackQuiz);
+
+    return new Response(JSON.stringify(quiz), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("Quiz generation failed", error);
+    return new Response(JSON.stringify(fallbackQuiz), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

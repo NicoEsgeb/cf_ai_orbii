@@ -48,3 +48,10 @@ Orbii constructs every model call inside `src/chatSession.ts`. The Durable Objec
   ```
 
 - The returned `response` string is saved as the assistant reply and stored back into the session history, ensuring the next call includes both sides of the exchange.
+
+## Roadmap chat context
+- On the roadmap screen (`public/app.js`), the browser builds a single `fullMessage` string and posts it to `/api/chat` with `{ message: fullMessage, sessionId: roadmapChatSessionId, mode: "roadmap", topic: currentRoadmapTopic, stepId: stepId || stepTitle }`.
+- `fullMessage` inlines a brief persona reminder plus constraints for the current roadmap step: sets the topic and step title, tells Orbii to answer only about this step or its prerequisites, and to stay short, clear, and supportive.
+- It also summarizes step progress (current task, any pending tasks with guidance, completed tasks, or that everything is done) and then ends with `User question: ${userText}`.
+- The Durable Object still only reads `body.message`; it ignores `mode`, `topic`, and `stepId`, and assembles `messages` exactly the same way: persona system prompt, optional study-text system prompt, prior turns, then `{ role: "user", content: fullMessage }`.
+- From the model’s perspective, roadmap chat is just another user message that happens to pack the topic, current step, and what’s done/pending/active into the user content so answers stay focused on that step.
